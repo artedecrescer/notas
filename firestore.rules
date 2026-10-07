@@ -1,0 +1,87 @@
+rules_version = '2';
+
+// Regras de segurança do Sistema de Notas.
+// Perfis: admin (coordenação/direção), titular (suas turmas, todas as disciplinas menos Inglês),
+// ingles (Inglês em todas as turmas). Quem não tem perfil ativo não lê nem grava nada.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logado() { return request.auth != null; }
+    function temPerfil() { return logado() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function perfil() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function ativo() { return temPerfil() && perfil().ativo == true; }
+    function isAdmin() { return ativo() && perfil().role == 'admin'; }
+    function isTitular() { return ativo() && perfil().role == 'titular'; }
+    function isIngles() { return ativo() && perfil().role == 'ingles'; }
+    function titularDa(turmaId) { return isTitular() && turmaId in perfil().turmas; }
+
+    function podeVer(turmaId, disc) {
+      return isAdmin() || titularDa(turmaId) || (isIngles() && disc == 'ingles');
+    }
+    function podeEditar(turmaId, disc) {
+      return isAdmin() || (titularDa(turmaId) && disc != 'ingles') || (isIngles() && disc == 'ingles');
+    }
+    function travado(bim) {
+      return get(/databases/$(database)/documents/config/escola).data.get('travas', {}).get(bim, false) == true;
+    }
+    function discValida(d) {
+      return d in ['portugues', 'matematica', 'ciencias', 'historia', 'geografia', 'ingles', 'artes', 'edfisica'];
+    }
+
+    // Marca de "sistema já configurado". Criada uma única vez, junto com o primeiro admin.
+    match /config/setup {
+      allow get: if true;
+      allow create: if logado()
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    match /config/escola {
+      allow get: if ativo();
+      allow write: if isAdmin();
+    }
+
+    match /users/{uid} {
+      allow get: if logado() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      // Admin cria qualquer perfil. Exceção: o PRIMEIRO acesso cria a si mesmo como admin,
+      // e só enquanto o sistema ainda não foi configurado.
+      allow create: if isAdmin()
+        || (logado() && request.auth.uid == uid
+            && !exists(/databases/$(database)/documents/config/setup)
+            && existsAfter(/databases/$(database)/documents/config/setup)
+            && request.resource.data.role == 'admin'
+            && request.resource.data.ativo == true);
+      allow update: if isAdmin();
+      allow delete: if isAdmin() && request.auth.uid != uid;
+    }
+
+    match /turmas/{id} {
+      allow read: if ativo();
+      allow write: if isAdmin();
+    }
+
+    match /alunos/{id} {
+      allow read: if isAdmin() || isIngles() || titularDa(resource.data.turmaId);
+      allow write: if isAdmin();
+    }
+
+    // Uma planilha = turma + disciplina + bimestre. Código: turmaId__disciplina__bimestre
+    match /planilhas/{pid} {
+      allow get: if pid.split('__').size() == 3
+        && podeVer(pid.split('__')[0], pid.split('__')[1]);
+      allow list: if isAdmin()
+        || titularDa(resource.data.turmaId)
+        || (isIngles() && resource.data.disc == 'ingles');
+      allow create, update: if pid.split('__').size() == 3
+        && discValida(pid.split('__')[1])
+        && pid.split('__')[2] in ['1', '2', '3', '4']
+        && podeEditar(pid.split('__')[0], pid.split('__')[1])
+        && request.resource.data.turmaId == pid.split('__')[0]
+        && request.resource.data.disc == pid.split('__')[1]
+        && string(request.resource.data.bim) == pid.split('__')[2]
+        && request.resource.data.alunos is map
+        && (isAdmin() || !travado(pid.split('__')[2]));
+      allow delete: if isAdmin();
+    }
+  }
+}

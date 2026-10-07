@@ -1,0 +1,13 @@
+{
+  "name": "sistema-notas",
+  "private": true,
+  "type": "module",
+  "description": "Sistema de notas e boletins — Colégio Arte de Crescer",
+  "scripts": {
+    "test:regras": "firebase emulators:exec --only firestore --project demo-notas \"node tests/regras.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "firebase-tools": "^15.0.0"
+  }
+}

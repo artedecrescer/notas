@@ -1,0 +1,7 @@
+node_modules/
+# NUNCA versionar dados de alunos (o repositório é público)
+*PRIVADO*.json
+backup_*.json
+dados_*.json
+*.xlsx
+*.pdf
