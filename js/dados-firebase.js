@@ -3,9 +3,9 @@ import {
   initializeApp, deleteApp, getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   signOut, onAuthStateChanged, sendPasswordResetEmail, setPersistence, browserLocalPersistence,
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs,
-  writeBatch, serverTimestamp,
+  writeBatch, serverTimestamp, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from '../vendor/firebase.js';
-import { planilhaId, novoId, ordenarTurmas } from './comum.js';
+import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno } from './comum.js';
 
 const ERROS = {
   'auth/invalid-credential': 'E-mail ou senha incorretos.',
