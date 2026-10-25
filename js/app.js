@@ -494,11 +494,11 @@ async function cadProfessores() {
     </div>
     <div id="np-turmas-box" style="margin-top:10px"><div class="campo">Turmas desta titular</div><div class="checks">${checks([], 'np-t')}</div></div>
     <p class="suave">Titular: lança todas as disciplinas das turmas marcadas, menos Inglês. Inglês: lança só Inglês, em todas as turmas. Coordenação/Direção: acesso total.<br>
-    Com <b>e-mail</b>, a pessoa consegue recuperar a senha sozinha. Com <b>nome de usuário</b> (sem @), o acesso é mais simples, mas se esquecer a senha é preciso criar um acesso novo.</p>
+    Com <b>e-mail</b>, a pessoa consegue recuperar a senha sozinha. Com <b>nome de usuário</b> (sem @), se esquecer a senha a coordenação clica em <b>Editar → Gerar nova senha</b>.</p>
     <div class="acoes"><button class="primario" id="np-criar">Criar acesso</button></div><div id="np-res"></div>
     <h3>Acessos cadastrados</h3>
     <div class="tabela-wrap"><table class="cad"><thead><tr><th class="esq">Nome</th><th class="esq">Usuário / e-mail</th><th class="esq">Perfil</th><th class="esq">Turmas</th><th>Situação</th><th></th></tr></thead>
-    <tbody>${users.map(u => `<tr data-uid="${u.uid}"><td class="esq"><b>${esc(u.nome)}</b>${u.uid === S.perfil.uid ? ' <span class="selo">você</span>' : ''}</td><td class="esq">${esc(emailParaLogin(u.email))}</td>
+    <tbody>${users.map(u => `<tr data-uid="${u.uid}"><td class="esq"><b>${u.nome ? esc(u.nome) : '<span class="suave">(sem nome)</span>'}</b>${u.uid === S.perfil.uid ? ' <span class="selo">você</span>' : ''}</td><td class="esq">${esc(emailParaLogin(u.email))}</td>
       <td class="esq">${PERFIS[u.role] || u.role}</td><td class="esq">${u.role === 'titular' ? (u.turmas || []).map(nomeT).join(', ') || '<span class="suave">nenhuma</span>' : '<span class="suave">todas</span>'}</td>
       <td>${u.ativo ? '<span class="selo">ativo</span>' : '<span class="selo admin">inativo</span>'}</td><td><button class="mini" data-editar>Editar</button></td></tr>
       <tr class="edicao" data-ed="${u.uid}" hidden><td colspan="6"><div class="grade">
@@ -506,7 +506,9 @@ async function cadProfessores() {
         <label class="campo">Perfil<select class="ed-perfil" ${u.uid === S.perfil.uid ? 'disabled' : ''}>${optsPerfil(u.role)}</select></label>
         <label class="campo">Situação<select class="ed-ativo" ${u.uid === S.perfil.uid ? 'disabled' : ''}><option value="1" ${u.ativo ? 'selected' : ''}>Ativo</option><option value="0" ${!u.ativo ? 'selected' : ''}>Inativo (bloqueado)</option></select></label></div>
         <div class="ed-turmas-box" style="margin-top:8px"><div class="campo">Turmas</div><div class="checks">${checks(u.turmas || [], 'ed-t')}</div></div>
-        <div class="acoes"><button class="mini primario" data-salvar>Salvar</button>${ehUsuarioInterno(u.email) ? '<span class="suave">Entra com usuário: se esquecer a senha, desative e crie um acesso novo.</span>' : '<button class="mini" data-reset>Enviar e-mail para redefinir senha</button>'}</div></td></tr>`).join('')}
+        <div class="acoes"><button class="mini primario" data-salvar>Salvar</button>${u.uid === S.perfil.uid ? '<span class="suave">Para trocar a sua senha, use "Minha senha" no alto da tela.</span>'
+          : (ehUsuarioInterno(u.email) ? '<button class="mini" data-nova>🔑 Gerar nova senha</button>' : '<button class="mini" data-reset>Enviar e-mail para redefinir senha</button>')
+            + '<button class="mini perigo" data-excluir>🗑 Excluir acesso</button>'}</div><div class="ed-res"></div></td></tr>`).join('')}
     </tbody></table></div>`;
   const toggleTurmas = () => { $('#np-turmas-box').hidden = $('#np-perfil').value !== 'titular'; };
   $('#np-perfil').onchange = toggleTurmas; toggleTurmas();
@@ -539,6 +541,39 @@ Depois de entrar, clique em "Minha senha" (no alto da tela) para criar a sua.</d
     const dados = { nome: $('.ed-nome', ed).value.trim(), role, turmas: role === 'titular' ? $$('.ed-t:checked', ed).map(x => x.value) : [], ativo: $('.ed-ativo', ed).value === '1' };
     if (uid === S.perfil.uid) { delete dados.role; delete dados.ativo; delete dados.turmas; }
     try { await api.atualizarUsuario(uid, dados); toast('Acesso atualizado.'); await cadProfessores(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+  });
+  const msgCred = (u, senha) => `Olá, ${u.nome}! Sua senha do sistema de notas foi trocada.
+Endereço: ${location.origin + location.pathname}
+Usuário: ${emailParaLogin(u.email)}
+Senha provisória: ${senha}
+Depois de entrar, clique em "Minha senha" (no alto da tela) para criar a sua.`;
+  $$('tr.edicao [data-nova]').forEach(b => b.onclick = () => {
+    const ed = b.closest('tr'), uid = ed.dataset.ed, u = users.find(x => x.uid === uid), senha = senhaAleatoria();
+    abrirModal(`<h2>Gerar nova senha para ${esc(u.nome || emailParaLogin(u.email))}</h2>
+      <p>A senha atual deixa de funcionar. O usuário continua o mesmo (<b>${esc(emailParaLogin(u.email))}</b>), e as notas e planejamentos dela continuam no lugar.</p>
+      <label class="campo">Senha provisória<input id="ns-senha" value="${senha}"></label>
+      <div class="acoes"><button class="primario" id="ns-ok">Gerar nova senha</button><button id="ns-cancelar">Cancelar</button></div>`);
+    $('#ns-cancelar').onclick = fecharModal;
+    $('#ns-ok').onclick = async () => {
+      const s = $('#ns-senha').value.trim(); if (s.length < 6) return toast('A senha precisa ter pelo menos 6 caracteres.', 'erro');
+      const ok = $('#ns-ok'); ok.disabled = true; ok.textContent = 'Gerando…';
+      try {
+        await api.novaSenhaUsuario(uid, s); fecharModal(); await cadProfessores();
+        $('#np-res').innerHTML = `<div class="ok-box">Nova senha criada. Envie para ${esc(u.nome)}:</div><div class="credenciais" id="np-cred">${esc(msgCred(u, s))}</div><div class="acoes"><button class="mini" id="np-copiar">Copiar mensagem</button></div>`;
+        $('#np-copiar').onclick = () => navigator.clipboard.writeText($('#np-cred').textContent).then(() => toast('Mensagem copiada.'));
+        $('#np-res').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) { toast(api.msgErro(e), 'erro'); ok.disabled = false; ok.textContent = 'Gerar nova senha'; }
+    };
+  });
+  $$('tr.edicao [data-excluir]').forEach(b => b.onclick = () => {
+    const uid = b.closest('tr').dataset.ed, u = users.find(x => x.uid === uid), nome = u.nome || emailParaLogin(u.email);
+    abrirModal(`<h2>Excluir o acesso de ${esc(nome)}?</h2>
+      <p>${esc(nome)} não vai mais conseguir entrar. As notas lançadas continuam no sistema. Se for só por um tempo, prefira mudar a Situação para <b>Inativo</b>.</p>
+      <div class="acoes"><button class="perigo" id="ex-ok">Excluir acesso</button><button id="ex-cancelar">Cancelar</button></div>`);
+    $('#ex-cancelar').onclick = fecharModal;
+    $('#ex-ok').onclick = async () => {
+      try { await api.excluirUsuario(uid); fecharModal(); toast('Acesso excluído.'); await cadProfessores(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+    };
   });
   $$('tr.edicao [data-reset]').forEach(b => b.onclick = async () => {
     const uid = b.closest('tr').dataset.ed, u = users.find(x => x.uid === uid);

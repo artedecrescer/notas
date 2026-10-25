@@ -76,7 +76,7 @@ O sistema gera uma mensagem pronta, com endereço, e-mail e senha provisória, p
 
 - **Início:** cada pessoa vê o que falta lançar no bimestre e a situação dos seus planejamentos. Clicar num quadradinho abre direto a turma e a disciplina.
 - **Planejamentos:** a professora envia o arquivo (Word ou PDF, até 6 MB); só ela e a coordenação veem. A coordenação baixa (o envio vira *Visto*), aprova ou pede ajuste com comentário. O arquivo fica guardado em partes no próprio banco de dados, porque o armazenamento de arquivos do Firebase exige plano pago.
-- **Login por usuário:** quem não tem e-mail pode entrar só com um nome de usuário (ex.: `laiza`). Nesse caso, se esquecer a senha, a coordenação desativa o acesso e cria outro.
+- **Login por usuário:** quem não tem e-mail pode entrar só com um nome de usuário (ex.: `laiza`). Se esquecer a senha, a coordenação abre **Cadastros → Professores e acessos → Editar → Gerar nova senha**. O usuário continua o mesmo (por baixo, o sistema cria uma conta nova e o mapa `logins/{usuario}` passa a apontar para ela; os planejamentos antigos continuam visíveis pela lista `uidsAnteriores`). **Excluir acesso** remove o perfil; a pessoa não entra mais.
 - **Minha senha** e **Ajuda** ficam no alto da tela.
 
 - **Lançar notas:** escolha a turma, a disciplina e o bimestre. Tudo é **salvo automaticamente**, e a tecla Enter desce para o próximo aluno.

@@ -114,9 +114,11 @@ export function loginParaEmail(v) {
 }
 export function emailParaLogin(e) {
   const s = String(e || '');
-  return s.endsWith(DOMINIO_INTERNO) ? s.slice(0, -DOMINIO_INTERNO.length) : s;
+  return s.endsWith(DOMINIO_INTERNO) ? s.slice(0, -DOMINIO_INTERNO.length).split('+')[0] : s;
 }
 export const ehUsuarioInterno = e => String(e || '').endsWith(DOMINIO_INTERNO);
+// Conta nova para o mesmo usuário (ao gerar nova senha): joao -> joao+k3x9@usuarios...
+export const emailVariante = login => loginParaEmail(login).replace(DOMINIO_INTERNO, '+' + Math.random().toString(36).slice(2, 6) + DOMINIO_INTERNO);
 
 // ---------- planejamentos ----------
 export const STATUS_PLAN = {

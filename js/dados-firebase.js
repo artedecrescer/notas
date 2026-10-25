@@ -5,7 +5,7 @@ import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs,
   writeBatch, serverTimestamp, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from '../vendor/firebase.js';
-import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno } from './comum.js';
+import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno, emailParaLogin, emailVariante } from './comum.js';
 
 const ERROS = {
   'auth/invalid-credential': 'E-mail ou senha incorretos.',
@@ -19,6 +19,8 @@ const ERROS = {
   'permission-denied': 'Você não tem permissão para esta ação.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.',
   'auth/requires-recent-login': 'Por segurança, saia e entre de novo antes de trocar a senha.',
+  'usuario-existente': 'Já existe um acesso com este nome de usuário. Use outro nome ou exclua o acesso antigo.',
+  'usuario-com-email': 'Este acesso usa e-mail: use o botão de enviar e-mail para redefinir a senha.',
   'usuario-sem-email': 'Quem entra com nome de usuário não recebe e-mail. Peça à coordenação para cadastrar uma senha nova.',
 };
 export function msgErro(e) {
@@ -41,6 +43,22 @@ export function criarApiFirebase(config) {
     return { uid: user.uid, ...s.data() };
   }
 
+  // Usuário (sem @) -> e-mail da conta atual. Depois de "Gerar nova senha", a conta muda e o mapa aponta para a nova.
+  async function resolverLogin(v) {
+    const em = loginParaEmail(v);
+    if (!ehUsuarioInterno(em)) return em;
+    try { const s = await getDoc(doc(db, 'logins', emailParaLogin(em))); if (s.exists() && s.data().email) return s.data().email; } catch (e) { /* sem mapa: usa o padrão */ }
+    return em;
+  }
+  async function criarConta(email, senha) { // app secundário: não desconecta quem está logado
+    const sec = initializeApp(config, 'sec-' + Date.now());
+    try {
+      const secAuth = getAuth(sec);
+      const cred = await createUserWithEmailAndPassword(secAuth, email, senha);
+      await signOut(secAuth); return cred.user.uid;
+    } finally { await deleteApp(sec).catch(() => {}); }
+  }
+
   async function lotes(ops) { // grava em lotes de até 450 operações
     for (let i = 0; i < ops.length; i += 450) {
       const b = writeBatch(db);
@@ -61,7 +79,7 @@ export function criarApiFirebase(config) {
       });
     },
     async recarregarPerfil() { return lerPerfil(auth.currentUser); },
-    async login(email, senha) { await signInWithEmailAndPassword(auth, loginParaEmail(email), senha); },
+    async login(email, senha) { await signInWithEmailAndPassword(auth, await resolverLogin(email), senha); },
     async logout() { await signOut(auth); },
     async resetSenha(email) {
       const e = loginParaEmail(email);
@@ -129,18 +147,47 @@ export function criarApiFirebase(config) {
       return s.docs.map(d => ({ uid: d.id, ...d.data() }));
     },
     async criarUsuario({ nome, email, senha, role, turmas }) {
-      // App secundário: cria a conta sem desconectar quem está logado.
-      const sec = initializeApp(config, 'sec-' + Date.now());
-      try {
-        const secAuth = getAuth(sec);
-        const em = loginParaEmail(email);
-        const cred = await createUserWithEmailAndPassword(secAuth, em, senha);
-        await signOut(secAuth);
-        await setDoc(doc(db, 'users', cred.user.uid), {
-          nome, email: em, role, turmas: turmas || [], ativo: true,
-        });
-        return cred.user.uid;
-      } finally { await deleteApp(sec).catch(() => {}); }
+      let em = loginParaEmail(email);
+      const interno = ehUsuarioInterno(em), login = emailParaLogin(em);
+      if (interno) {
+        const existentes = (await getDocs(collection(db, 'users'))).docs.map(d => d.data());
+        if (existentes.some(u => ehUsuarioInterno(u.email) && emailParaLogin(u.email) === login)) {
+          const er = new Error('existente'); er.code = 'usuario-existente'; throw er;
+        }
+      }
+      let uid;
+      try { uid = await criarConta(em, senha); } catch (e) {
+        // Usuário de um acesso excluído: a conta antiga continua no Firebase, então cria outra com o mesmo nome.
+        if (!(interno && e.code === 'auth/email-already-in-use')) throw e;
+        em = emailVariante(login); uid = await criarConta(em, senha);
+      }
+      const b = writeBatch(db);
+      b.set(doc(db, 'users', uid), { nome, email: em, role, turmas: turmas || [], ativo: true });
+      if (interno) b.set(doc(db, 'logins', login), { email: em, uid });
+      await b.commit();
+      return uid;
+    },
+    async novaSenhaUsuario(uid, senha) {
+      const s = await getDoc(doc(db, 'users', uid)); const u = s.data();
+      if (!ehUsuarioInterno(u.email)) { const er = new Error('com e-mail'); er.code = 'usuario-com-email'; throw er; }
+      const login = emailParaLogin(u.email), em = emailVariante(login);
+      const novo = await criarConta(em, senha);
+      const b = writeBatch(db);
+      b.set(doc(db, 'users', novo), { ...u, email: em, uidsAnteriores: [...(u.uidsAnteriores || []), uid] });
+      b.delete(doc(db, 'users', uid));
+      b.set(doc(db, 'logins', login), { email: em, uid: novo });
+      await b.commit();
+      return novo;
+    },
+    async excluirUsuario(uid) {
+      const s = await getDoc(doc(db, 'users', uid)); const u = s.exists() ? s.data() : {};
+      const b = writeBatch(db);
+      b.delete(doc(db, 'users', uid));
+      if (ehUsuarioInterno(u.email)) {
+        const login = emailParaLogin(u.email), m = await getDoc(doc(db, 'logins', login));
+        if (m.exists() && m.data().email === u.email) b.delete(doc(db, 'logins', login));
+      }
+      await b.commit();
     },
     async atualizarUsuario(uid, dados) { await updateDoc(doc(db, 'users', uid), dados); },
 
@@ -175,9 +222,14 @@ export function criarApiFirebase(config) {
       await b.commit(); return id;
     },
     async listarPlanejamentos(todos) {
-      const q = todos ? collection(db, 'planejamentos') : query(collection(db, 'planejamentos'), where('autorUid', '==', usuarioAtual.uid));
-      const s = await getDocs(q);
-      return s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ((b.enviadoEm && b.enviadoEm.seconds) || 9e9) - ((a.enviadoEm && a.enviadoEm.seconds) || 9e9));
+      let docs;
+      if (todos) docs = (await getDocs(collection(db, 'planejamentos'))).docs;
+      else {
+        const p = await lerPerfil(usuarioAtual);
+        const uids = [usuarioAtual.uid, ...((p && p.uidsAnteriores) || [])];
+        docs = (await Promise.all(uids.map(x => getDocs(query(collection(db, 'planejamentos'), where('autorUid', '==', x)))))).flatMap(s => s.docs);
+      }
+      return docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ((b.enviadoEm && b.enviadoEm.seconds) || 9e9) - ((a.enviadoEm && a.enviadoEm.seconds) || 9e9));
     },
     async baixarPartes(id, n) {
       const ss = await Promise.all(Array.from({ length: n }, (_, i) => getDoc(doc(db, 'planejamentos', id, 'partes', String(i)))));

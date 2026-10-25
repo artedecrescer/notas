@@ -114,6 +114,13 @@ export function criarApiDemo() {
       const uid = 'u-' + novoId(); st.users[uid] = { nome, email: e, role, turmas: turmas || [], ativo: true }; st.senhas[e] = senha; salvar(); return uid;
     },
     async atualizarUsuario(uid, d) { exigirAdmin(); st.users[uid] = { ...st.users[uid], ...d }; salvar(); },
+    async novaSenhaUsuario(uid, senha) {
+      exigirAdmin(); await atraso(); const u = st.users[uid];
+      if (!ehUsuarioInterno(u.email)) throw erro('usuario-com-email');
+      if (!senha || senha.length < 6) throw erro('auth/weak-password');
+      st.senhas[u.email] = senha; salvar(); return uid;
+    },
+    async excluirUsuario(uid) { exigirAdmin(); const u = st.users[uid]; delete st.users[uid]; if (u) delete st.senhas[u.email]; salvar(); },
 
     async getPlanilha(turmaId, disc, bim) {
       await atraso(); if (!podeVer(perfilAtual(), turmaId, disc)) throw erro('permission-denied');

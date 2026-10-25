@@ -14,6 +14,10 @@ service cloud.firestore {
     function isTitular() { return ativo() && perfil().role == 'titular'; }
     function isIngles() { return ativo() && perfil().role == 'ingles'; }
     function titularDa(turmaId) { return isTitular() && turmaId in perfil().turmas; }
+    // Autor de um planejamento: a conta atual ou uma conta antiga da mesma pessoa (antes de gerar nova senha).
+    function meu(autorUid) {
+      return ativo() && (autorUid == request.auth.uid || autorUid in perfil().get('uidsAnteriores', []));
+    }
 
     function podeVer(turmaId, disc) {
       return isAdmin() || titularDa(turmaId) || (isIngles() && disc == 'ingles');
@@ -55,6 +59,13 @@ service cloud.firestore {
       allow delete: if isAdmin() && request.auth.uid != uid;
     }
 
+    // Nome de usuário -> conta atual. Lido antes do login (só contém o e-mail interno), gravado pela coordenação.
+    match /logins/{usuario} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if isAdmin();
+    }
+
     match /turmas/{id} {
       allow read: if ativo();
       allow write: if isAdmin();
@@ -87,7 +98,7 @@ service cloud.firestore {
     // O arquivo fica dividido em partes (subcoleção), porque o armazenamento de arquivos do Firebase é pago.
     function planDe(id) { return get(/databases/$(database)/documents/planejamentos/$(id)).data; }
     match /planejamentos/{id} {
-      allow read: if isAdmin() || (ativo() && resource.data.autorUid == request.auth.uid);
+      allow read: if isAdmin() || meu(resource.data.autorUid);
       allow create: if ativo()
         && request.resource.data.autorUid == request.auth.uid
         && request.resource.data.status == 'enviado'
@@ -99,17 +110,17 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['status', 'comentario', 'avaliadoEm', 'avaliadoPor', 'avaliadoPorNome'])
         && request.resource.data.status in ['enviado', 'visto', 'aprovado', 'ajustar'];
-      allow delete: if isAdmin() || (ativo() && resource.data.autorUid == request.auth.uid && resource.data.status == 'enviado');
+      allow delete: if isAdmin() || (meu(resource.data.autorUid) && resource.data.status == 'enviado');
 
       match /partes/{n} {
-        allow read: if isAdmin() || (ativo() && planDe(id).autorUid == request.auth.uid);
+        allow read: if isAdmin() || meu(planDe(id).autorUid);
         allow create: if ativo()
           && getAfter(/databases/$(database)/documents/planejamentos/$(id)).data.autorUid == request.auth.uid
           && request.resource.data.keys().hasOnly(['d'])
           && request.resource.data.d is string
           && request.resource.data.d.size() < 1000000;
         allow update: if false;
-        allow delete: if isAdmin() || (ativo() && planDe(id).autorUid == request.auth.uid && planDe(id).status == 'enviado');
+        allow delete: if isAdmin() || (meu(planDe(id).autorUid) && planDe(id).status == 'enviado');
       }
     }
   }

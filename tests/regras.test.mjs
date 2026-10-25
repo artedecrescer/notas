@@ -96,6 +96,26 @@ await t('desativada NÃO envia planejamento', assertFails(T.doc('planejamentos/p
 await t('conta sem perfil NÃO lê alunos', assertFails(db('X').collection('alunos').where('turmaId', '==', 't1').get()));
 await t('admin NÃO apaga a si mesmo', assertFails(A.doc('users/A').delete()));
 
+console.log('— Gerar nova senha / excluir acesso');
+await t('visitante lê o mapa de usuário (antes do login)', assertSucceeds(db(null).doc('logins/joao').get()));
+await t('visitante NÃO lista os usuários', assertFails(db(null).collection('logins').get()));
+await t('visitante NÃO grava o mapa', assertFails(db(null).doc('logins/joao').set({ email: 'x' })));
+await t('professora NÃO grava o mapa', assertFails(I.doc('logins/joao').set({ email: 'x' })));
+await t('admin cria planejamento antigo de I (via I)', assertSucceeds((() => { const b = I.batch();
+  b.set(I.doc('planejamentos/q1'), meta('I')); b.set(I.doc('planejamentos/q1/partes/0'), { d: 'QQ' }); return b.commit(); })()));
+await t('admin troca a conta de I por I2 (lote)', assertSucceeds((() => { const b = A.batch();
+  b.set(A.doc('users/I2'), { nome: 'Ing', role: 'ingles', turmas: [], ativo: true, email: 'i+x', uidsAnteriores: ['I'] });
+  b.delete(A.doc('users/I')); b.set(A.doc('logins/ing'), { email: 'i+x', uid: 'I2' }); return b.commit(); })()));
+const I2 = db('I2');
+await t('conta antiga NÃO lê mais nada', assertFails(I.doc('planejamentos/q1').get()));
+await t('conta nova lê o planejamento antigo', assertSucceeds(I2.doc('planejamentos/q1').get()));
+await t('conta nova lista os antigos', assertSucceeds(I2.collection('planejamentos').where('autorUid', '==', 'I').get()));
+await t('conta nova baixa o arquivo antigo', assertSucceeds(I2.doc('planejamentos/q1/partes/0').get()));
+await t('conta nova cancela o antigo ainda enviado', assertSucceeds((() => { const b = I2.batch();
+  b.delete(I2.doc('planejamentos/q1/partes/0')); b.delete(I2.doc('planejamentos/q1')); return b.commit(); })()));
+await t('professora NÃO apaga acesso de outra', assertFails(I2.doc('users/T2').delete()));
+await t('admin exclui acesso + mapa', assertSucceeds((() => { const b = A.batch(); b.delete(A.doc('users/I2')); b.delete(A.doc('logins/ing')); return b.commit(); })()));
+
 console.log(`\nRESULTADO: ${ok} passaram, ${falhas.length} falharam`);
 if (falhas.length) console.log('FALHAS:', falhas);
 await env.cleanup();
