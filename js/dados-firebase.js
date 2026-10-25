@@ -59,10 +59,10 @@ export function criarApiFirebase(config) {
     } finally { await deleteApp(sec).catch(() => {}); }
   }
 
-  async function lotes(ops) { // grava em lotes de até 450 operações
+  async function lotes(ops, mesclar = false) { // grava em lotes de até 450 operações
     for (let i = 0; i < ops.length; i += 450) {
       const b = writeBatch(db);
-      ops.slice(i, i + 450).forEach(([ref, data]) => b.set(ref, data));
+      ops.slice(i, i + 450).forEach(([ref, data]) => (mesclar ? b.set(ref, data, { merge: true }) : b.set(ref, data)));
       await b.commit();
     }
   }
@@ -137,7 +137,7 @@ export function criarApiFirebase(config) {
       await setDoc(doc(db, 'alunos', id), dados, { merge: true }); return id;
     },
     async salvarAlunosEmLote(lista) {
-      await lotes(lista.map(a => { const id = a.id || novoId(); const { id: _, ...d } = a; return [doc(db, 'alunos', id), d]; }));
+      await lotes(lista.map(a => { const id = a.id || novoId(); const { id: _, ...d } = a; return [doc(db, 'alunos', id), d]; }), true);
     },
     async excluirAluno(id) { await deleteDoc(doc(db, 'alunos', id)); },
 
