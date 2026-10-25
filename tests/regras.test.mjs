@@ -1,5 +1,8 @@
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
 import fs from 'fs';
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/firestore';
+const AGORA = () => firebase.firestore.FieldValue.serverTimestamp();
 const env = await initializeTestEnvironment({ projectId: 'demo-notas',
   firestore: { rules: fs.readFileSync('firestore.rules', 'utf8'), host: '127.0.0.1', port: 8085 } });
 let ok = 0, falhas = [];
@@ -66,10 +69,18 @@ await t('admin edita bimestre fechado', assertSucceeds(A.doc('planilhas/' + P('t
 console.log('— Planejamentos (privados entre professoras)');
 await t('admin cria segunda titular', assertSucceeds(A.doc('users/T2').set({ nome: 'Tit2', role: 'titular', turmas: ['t2'], ativo: true })));
 const T2 = db('T2');
-const meta = (autor, extra = {}) => ({ autorUid: autor, autorNome: 'x', turmas: ['t2'], periodo: 'Quinzena 1', nomeArquivo: 'p.docx', tipo: 'x', tamanho: 10, partes: 1, status: 'enviado', comentario: '', ...extra });
+const NOMES = { T2: 'Tit2', I: 'Ing', T: 'Tit' };
+const meta = (autor, extra = {}) => ({ autorUid: autor, autorNome: NOMES[autor] || 'x', turmas: ['t2'], periodo: 'Quinzena 1', nomeArquivo: 'p.docx', tipo: 'x', tamanho: 10, partes: 1, status: 'enviado', comentario: '', enviadoEm: AGORA(), ...extra });
 await t('titular envia planejamento (doc + parte, em lote)', assertSucceeds((() => { const b = T2.batch();
   b.set(T2.doc('planejamentos/p1'), meta('T2')); b.set(T2.doc('planejamentos/p1/partes/0'), { d: 'QUJD' }); return b.commit(); })()));
 await t('NÃO envia em nome de outra pessoa', assertFails(T2.doc('planejamentos/p2').set(meta('I'))));
+await t('NÃO envia arquivo .exe/.html', assertFails(T2.doc('planejamentos/p4').set(meta('T2', { nomeArquivo: 'plano.docx.exe' }))));
+await t('NÃO envia arquivo .html', assertFails(T2.doc('planejamentos/p5').set(meta('T2', { nomeArquivo: 'plano.html' }))));
+await t('NÃO se passa por outra professora (autorNome)', assertFails(T2.doc('planejamentos/p6').set(meta('T2', { autorNome: 'Gonçalina' }))));
+await t('NÃO inventa data de envio', assertFails(T2.doc('planejamentos/p7').set(meta('T2', { enviadoEm: 'ontem' }))));
+await t('NÃO chega já com comentário/avaliação', assertFails(T2.doc('planejamentos/p8').set(meta('T2', { avaliadoPorNome: 'Coord' }))));
+await t('NÃO chega com comentário preenchido', assertFails(T2.doc('planejamentos/p10').set(meta('T2', { comentario: 'aprovado!' }))));
+await t('aceita PDF com maiúsculas', assertSucceeds(T2.doc('planejamentos/p11').set(meta('T2', { nomeArquivo: 'Plano Quinzenal.PDF' }))));
 await t('NÃO envia já aprovado', assertFails(T2.doc('planejamentos/p3').set(meta('T2', { status: 'aprovado' }))));
 await t('autora lê o próprio', assertSucceeds(T2.doc('planejamentos/p1').get()));
 await t('autora baixa o arquivo', assertSucceeds(T2.doc('planejamentos/p1/partes/0').get()));

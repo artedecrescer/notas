@@ -100,7 +100,13 @@ service cloud.firestore {
     match /planejamentos/{id} {
       allow read: if isAdmin() || meu(resource.data.autorUid);
       allow create: if ativo()
+        && request.resource.data.keys().hasOnly(['autorUid', 'autorNome', 'periodo', 'turmas', 'turmasNomes', 'nota',
+             'nomeArquivo', 'tipo', 'tamanho', 'bimestre', 'partes', 'status', 'comentario', 'enviadoEm'])
         && request.resource.data.autorUid == request.auth.uid
+        && request.resource.data.autorNome == perfil().get('nome', '')
+        && request.resource.data.enviadoEm == request.time
+        && request.resource.data.comentario == ''
+        && request.resource.data.nomeArquivo.matches('(?i).+[.](pdf|docx?|odt|xlsx?|ods|pptx?|odp|jpe?g|png)')
         && request.resource.data.status == 'enviado'
         && request.resource.data.partes is int
         && request.resource.data.partes >= 1 && request.resource.data.partes <= 10

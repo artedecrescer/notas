@@ -30,6 +30,15 @@ const fila = { p: Promise.resolve(), pend: 0 };
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 let tt;
+// Sai sozinho depois de 1 hora sem uso (computador da escola é compartilhado).
+let ultimoUso = Date.now();
+['click', 'keydown', 'touchstart', 'scroll'].forEach(ev => document.addEventListener(ev, () => { ultimoUso = Date.now(); }, { passive: true, capture: true }));
+setInterval(async () => {
+  if (S.perfil && Date.now() - ultimoUso > 60 * 60 * 1000) {
+    ultimoUso = Date.now(); await api.logout().catch(() => {});
+    setTimeout(() => toast('Você ficou 1 hora sem usar o sistema e saiu automaticamente. Entre de novo.'), 600);
+  }
+}, 60 * 1000);
 function toast(m, tipo = 'ok') { const el = $('#toast'); el.textContent = m; el.className = 'toast show ' + tipo; clearTimeout(tt); tt = setTimeout(() => (el.className = 'toast'), 3600); }
 function baixar(nome, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nome; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); }
 function slug(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, ''); }
@@ -317,13 +326,13 @@ async function viewLancar() {
 function htmlBoletim(aluno, turma, mapa) {
   const l = linhasBoletim(aluno.id, mapa);
   const n = v => (v === null ? '' : fmt(v)), f = v => (v === null ? '' : v);
-  const obs = []; l.forEach(x => x.obs.forEach(o => obs.push(`<b>${x.nome}</b> (${o.bim}º bim): ${esc(o.texto)}`)));
+  const obs = []; l.forEach(x => x.obs.forEach(o => obs.push(`<b>${esc(x.nome)}</b> (${o.bim}º bim): ${esc(o.texto)}`)));
   return `<div class="bol-cab"><img src="img/logo.png" alt=""><b>BOLETIM ESCOLAR ${esc(S.escola.ano || '')}</b></div>
     <div class="bol-linha"><span>Aluno(a): <b>${esc((aluno.nome || '').toUpperCase())}</b></span><span>Série: ${esc((turma.nome || '').toUpperCase())}</span></div>
     <table class="bol"><thead>
       <tr><th rowspan="2">Componentes Curriculares</th><th colspan="4">NOTAS</th><th colspan="4">FALTAS</th><th rowspan="2">5º CONCEITO</th><th rowspan="2">Total de Faltas</th><th rowspan="2">Resultado Final</th></tr>
       <tr>${[1, 2, 3, 4].map(b => `<th>${b}º BIM</th>`).join('')}${[1, 2, 3, 4].map(b => `<th>${b}º BIM</th>`).join('')}</tr></thead>
-      <tbody>${l.map(x => `<tr><td class="esq">${x.nome}</td>${x.notas.map(v => `<td>${n(v)}</td>`).join('')}${x.faltas.map(v => `<td>${f(v)}</td>`).join('')}<td></td><td>${f(x.total)}</td><td></td></tr>`).join('')}</tbody></table>
+      <tbody>${l.map(x => `<tr><td class="esq">${esc(x.nome)}</td>${x.notas.map(v => `<td>${n(v)}</td>`).join('')}${x.faltas.map(v => `<td>${f(v)}</td>`).join('')}<td></td><td>${f(x.total)}</td><td></td></tr>`).join('')}</tbody></table>
     <div class="bol-linha"><span>Professora: ${esc((aluno.professora || turma.professora || '').toUpperCase())}</span><span>Coordenadora Pedagógica: ${esc((S.escola.coordenadora || '').toUpperCase())}</span></div>
     ${obs.length ? `<div class="suave" style="margin-top:8px">Observações: ${obs.join(' • ')}</div>` : ''}`;
 }
@@ -482,7 +491,7 @@ async function cadProfessores() {
   const vivo = marcaVista();
   const users = (await api.listarUsuarios()).sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR'));
   if (!vivo()) return;
-  const nomeT = id => (S.turmas.find(t => t.id === id) || {}).nome || '?';
+  const nomeT = id => esc((S.turmas.find(t => t.id === id) || {}).nome || '?');
   const checks = (sel, pref) => S.turmas.map(t => `<label><input type="checkbox" class="${pref}" value="${t.id}" ${sel.includes(t.id) ? 'checked' : ''}> ${esc(t.nome)}</label>`).join('');
   const optsPerfil = r => Object.entries(PERFIS).map(([k, n]) => `<option value="${k}" ${k === r ? 'selected' : ''}>${n}</option>`).join('');
   el.innerHTML = `<h3>Novo acesso</h3>
@@ -602,6 +611,8 @@ async function viewEscola() {
     const travas = {}; BIMESTRES.forEach(b => { travas[String(b)] = !!$(`.e-trava[value="${b}"]`).checked; });
     const d = { nome: $('#e-nome').value.trim(), ano: $('#e-ano').value.trim(), coordenadora: $('#e-coord').value.trim(),
       corte: parseNum($('#e-corte').value) ?? 6, bimestreAtual: Number($('#e-bim').value), travas };
+    if (!d.nome) return toast('Preencha o nome da escola (ele sai no boletim).', 'erro');
+    if (d.corte < 0 || d.corte > 10) return toast('A média para aprovação precisa ficar entre 0 e 10.', 'erro');
     try { await api.salvarEscola(d); S.escola = { ...S.escola, ...d }; toast('Dados salvos.'); render(); } catch (err) { toast(api.msgErro(err), 'erro'); }
   };
   $('#x-backup').onclick = async () => {
@@ -781,7 +792,7 @@ async function baixarPlanejamento(x) {
   toast('Baixando…');
   const partes = await api.baixarPartes(x.id, x.partes);
   const bytes = partes.map(b64ParaBytes);
-  baixar(x.nomeArquivo, new Blob(bytes, { type: x.tipo || 'application/octet-stream' }));
+  baixar(/\.(pdf|docx?|odt|xlsx?|ods|pptx?|odp|jpe?g|png)$/i.test(x.nomeArquivo || '') ? x.nomeArquivo : (x.nomeArquivo || 'arquivo') + '.bin', new Blob(bytes, { type: 'application/octet-stream' }));
   if (isAdmin(S.perfil) && x.status === 'enviado') { try { await api.avaliarPlanejamento(x.id, { status: 'visto', avaliadoPorNome: S.perfil.nome || '' }); x.status = 'visto'; } catch (e) {} return true; }
 }
 const nomesTurmas = ids => (ids || []).map(id => (S.turmas.find(t => t.id === id) || {}).nome || '').filter(Boolean).join(', ');
@@ -805,8 +816,10 @@ async function planProfessora(pre) {
     <div class="acoes"><button class="primario grande" id="pl-enviar">Enviar para a coordenação</button><span id="pl-prog" class="suave"></span></div></div>
     <div class="card"><h2>Meus envios</h2><div id="pl-lista" class="carregando-bloco">Carregando…</div></div>`;
   let arquivo = null;
+  const ARQ_OK = /\.(pdf|docx?|odt|xlsx?|ods|pptx?|odp|jpe?g|png)$/i;
   const escolher = f => {
     if (!f) return;
+    if (!ARQ_OK.test(f.name)) { arquivo = null; $('#pl-arq-txt').textContent = `⚠ ${f.name}: envie um arquivo do Word, PDF, Excel, PowerPoint ou uma foto (JPG/PNG).`; $('#pl-soltar').classList.add('erro-borda'); return; }
     if (f.size > MAX_ARQUIVO) { arquivo = null; $('#pl-arq-txt').textContent = `⚠ ${f.name} tem ${tamanhoLegivel(f.size)}. O limite é ${tamanhoLegivel(MAX_ARQUIVO)}: salve como PDF ou diminua as imagens.`; $('#pl-soltar').classList.add('erro-borda'); return; }
     arquivo = f; $('#pl-soltar').classList.remove('erro-borda'); $('#pl-soltar').classList.add('ok-borda');
     $('#pl-arq-txt').textContent = `✓ ${f.name} (${tamanhoLegivel(f.size)}) — clique para trocar`;
