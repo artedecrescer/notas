@@ -1,6 +1,6 @@
 // MODO DEMONSTRAÇÃO — mesma interface do Firebase, mas tudo fica no navegador.
 // Dados 100% fictícios. Aplica as mesmas permissões das regras do servidor.
-import { planilhaId, novoId, ordenarTurmas, podeEditar, podeVer, DISCIPLINAS } from './comum.js';
+import { planilhaId, novoId, ordenarTurmas, podeEditar, podeVer, DISCIPLINAS, loginParaEmail, ehUsuarioInterno } from './comum.js';
 
 const KEY = 'sistema-notas-demo-v1';
 const SENHA = 'demo123';
@@ -40,7 +40,7 @@ function semear() {
               travas: { '1': true, '2': false, '3': false, '4': false } },
     turmas: Object.fromEntries(turmas.map(t => [t.id, t])),
     alunos: Object.fromEntries(alunos.map(a => [a.id, a])),
-    planilhas, users, senhas: Object.fromEntries(Object.values(users).map(u => [u.email, SENHA])), sessao: null,
+    planilhas, users, planejamentos: {}, partes: {}, senhas: Object.fromEntries(Object.values(users).map(u => [u.email, SENHA])), sessao: null,
   };
 }
 
@@ -60,7 +60,8 @@ export function criarApiDemo() {
     modo: 'demo',
     msgErro(e) {
       const m = { 'auth/invalid-credential': 'E-mail ou senha incorretos.', 'permission-denied': 'Você não tem permissão para esta ação.',
-                  'auth/email-already-in-use': 'Já existe uma conta com este e-mail.', 'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.' };
+                  'auth/email-already-in-use': 'Já existe uma conta com este e-mail ou usuário.', 'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+                  'usuario-sem-email': 'Quem entra com nome de usuário não recebe e-mail. Peça à coordenação para cadastrar uma senha nova.' };
       return m[e && e.code] || (e && e.message) || 'Erro inesperado.';
     },
     contasDemo: [
@@ -75,13 +76,17 @@ export function criarApiDemo() {
     async recarregarPerfil() { return perfilAtual(); },
     async login(email, senha) {
       await atraso();
-      const e = email.trim().toLowerCase();
+      const e = loginParaEmail(email);
       if (st.senhas[e] !== senha) throw erro('auth/invalid-credential');
       const uid = Object.keys(st.users).find(k => st.users[k].email === e);
       st.sessao = uid; salvar(); notificar();
     },
     async logout() { st.sessao = null; salvar(); notificar(); },
-    async resetSenha() { await atraso(); },
+    async resetSenha(email) { await atraso(); if (ehUsuarioInterno(loginParaEmail(email))) throw erro('usuario-sem-email'); },
+    async trocarSenha(atual, nova) {
+      const p = perfilAtual(); if (st.senhas[p.email] !== atual) throw erro('auth/invalid-credential', 'Senha atual incorreta.');
+      if (!nova || nova.length < 6) throw erro('auth/weak-password'); st.senhas[p.email] = nova; salvar();
+    },
     async setupFeito() { return true; },
     async setupInicial() { throw erro('demo', 'Não disponível no modo demonstração.'); },
 
@@ -103,7 +108,7 @@ export function criarApiDemo() {
 
     async listarUsuarios() { exigirAdmin(); return Object.entries(st.users).map(([uid, u]) => ({ uid, ...u })); },
     async criarUsuario({ nome, email, senha, role, turmas }) {
-      exigirAdmin(); const e = email.trim().toLowerCase();
+      exigirAdmin(); const e = loginParaEmail(email);
       if (st.senhas[e]) throw erro('auth/email-already-in-use');
       if (!senha || senha.length < 6) throw erro('auth/weak-password');
       const uid = 'u-' + novoId(); st.users[uid] = { nome, email: e, role, turmas: turmas || [], ativo: true }; st.senhas[e] = senha; salvar(); return uid;
@@ -129,6 +134,32 @@ export function criarApiDemo() {
       return Object.values(st.planilhas).filter(x => x.turmaId === turmaId).map(x => JSON.parse(JSON.stringify(x)));
     },
     async getPlanilhasBimestre(bim) { exigirAdmin(); return Object.values(st.planilhas).filter(x => x.bim === Number(bim)); },
+
+    async enviarPlanejamento(meta, partes) {
+      await atraso(); const p = perfilAtual(); if (!p || !p.ativo) throw erro('permission-denied');
+      const id = novoId();
+      st.planejamentos = st.planejamentos || {}; st.partes = st.partes || {};
+      st.planejamentos[id] = { ...meta, autorUid: p.uid, partes: partes.length, status: 'enviado', comentario: '', enviadoEm: new Date().toISOString() };
+      st.partes[id] = partes;
+      try { salvar(); localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { delete st.planejamentos[id]; delete st.partes[id]; throw erro('demo', 'No modo demonstração o navegador só guarda arquivos pequenos.'); }
+      return id;
+    },
+    async listarPlanejamentos(todos) {
+      await atraso(); const p = perfilAtual(); if (todos) exigirAdmin();
+      return Object.entries(st.planejamentos || {}).map(([id, x]) => ({ id, ...x })).filter(x => todos || x.autorUid === p.uid)
+        .sort((a, b) => String(b.enviadoEm).localeCompare(String(a.enviadoEm)));
+    },
+    async baixarPartes(id) {
+      const p = perfilAtual(), x = (st.planejamentos || {})[id];
+      if (!x || !(p.role === 'admin' || x.autorUid === p.uid)) throw erro('permission-denied');
+      return st.partes[id] || [];
+    },
+    async avaliarPlanejamento(id, d) { exigirAdmin(); st.planejamentos[id] = { ...st.planejamentos[id], ...d, avaliadoEm: new Date().toISOString() }; salvar(); },
+    async excluirPlanejamento(id) {
+      const p = perfilAtual(), x = st.planejamentos[id];
+      if (!(p.role === 'admin' || (x.autorUid === p.uid && x.status === 'enviado'))) throw erro('permission-denied');
+      delete st.planejamentos[id]; delete st.partes[id]; salvar();
+    },
 
     async exportarTudo() {
       exigirAdmin();

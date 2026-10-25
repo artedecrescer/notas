@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sistema de Notas — Arte de Crescer</title>
+<title>Notas e Planejamentos — Arte de Crescer</title>
 <link rel="icon" type="image/png" href="img/logo.png">
 <style>
   :root{
@@ -120,6 +120,43 @@
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0)} .toast.erro{background:#9f2a25}
   .carregando{text-align:center;padding:30vh 0;color:var(--suave)}
   @media(max-width:600px){.wrap{padding:10px}.topo img{height:32px}.card{padding:14px}}
+  /* v2: início, planejamentos, janelas */
+  .topo-acoes{display:flex;gap:6px;flex-wrap:wrap}
+  .abas button{font-size:15px}
+  .saudacao h1{margin:6px 0 2px;font-size:24px;color:var(--azul-esc)} .saudacao p{margin:0 0 14px}
+  .atalhos{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+  .atalho{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;background:#fff;box-shadow:var(--sombra);border-radius:var(--raio);padding:16px 18px;border:2px solid transparent}
+  .atalho:hover{border-color:var(--azul);filter:none}
+  .atalho span{font-size:28px} .atalho b{font-size:17px;color:var(--azul-esc)} .atalho small{color:var(--suave);font-weight:500}
+  .duas-colunas.inicio{grid-template-columns:1fr 1fr;margin-top:0} @media(max-width:820px){.duas-colunas.inicio{grid-template-columns:1fr}}
+  .barra-linha{display:grid;grid-template-columns:90px 1fr 46px;align-items:center;gap:10px;margin:8px 0}
+  .barra{height:12px;background:#eef2f6;border-radius:99px;overflow:hidden} .barra i{display:block;height:100%;background:var(--verde);border-radius:99px}
+  button.cel{background:transparent;padding:6px 4px;width:100%;font-weight:800;color:inherit} button.cel:hover{text-decoration:underline}
+  table.mini-pend td{padding:0}
+  .mini-plan{padding:7px 0;border-bottom:1px solid var(--linha);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .st{font-size:12px;font-weight:800;padding:3px 9px;border-radius:99px;white-space:nowrap}
+  .st-enviado{background:#fff2c7;color:#7a5600} .st-visto{background:var(--azul-claro);color:var(--azul-esc)} .st-aprovado{background:#e8f6ee;color:#1d6b46} .st-ajustar{background:#fdecec;color:#9f2a25}
+  .passos{display:flex;flex-direction:column;gap:14px;margin:8px 0}
+  .passo{display:grid;grid-template-columns:34px 1fr;gap:10px;align-items:start}
+  .passo .num{width:30px;height:30px;border-radius:50%;background:var(--azul);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;margin-top:16px}
+  .soltar{display:block;border:2px dashed #b9c6d4;border-radius:12px;padding:22px 14px;text-align:center;cursor:pointer;background:#f8fafc;color:var(--texto);font-weight:600;margin-top:4px}
+  .soltar:hover,.soltar.arrastando{border-color:var(--azul);background:var(--azul-claro)}
+  .soltar.ok-borda{border-color:var(--verde);background:#e8f6ee;color:#1d6b46} .soltar.erro-borda{border-color:var(--coral);background:#fdecec;color:#9f2a25}
+  button.grande{padding:13px 22px;font-size:16px} button.ok{background:#e8f6ee;color:#1d6b46}
+  .plan{border:1px solid var(--linha);border-left:5px solid #ecd28a;border-radius:12px;padding:12px 14px;margin-bottom:10px}
+  .plan.visto{border-left-color:var(--azul)} .plan.aprovado{border-left-color:var(--verde)} .plan.ajustar{border-left-color:var(--coral)}
+  .plan-cab{display:flex;gap:8px;align-items:center;flex-wrap:wrap} .plan-cab .suave{flex-basis:100%}
+  .plan-arq{margin:6px 0 2px}
+  .comentario{background:#fff6dd;border-radius:9px;padding:8px 10px;margin-top:6px}
+  .plan.ajustar .comentario{background:#fdecec}
+  .modal-fundo{position:fixed;inset:0;background:rgba(15,25,40,.45);display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px;z-index:60;overflow:auto}
+  .modal{background:#fff;border-radius:16px;padding:22px 22px 18px;width:100%;max-width:480px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+  .modal.largo{max-width:680px} .modal h2{margin:0 0 6px;color:var(--azul-esc);font-size:19px}
+  .modal-x{position:absolute;top:10px;right:10px;background:transparent;font-size:18px;padding:6px 10px}
+  .pilha{display:flex;flex-direction:column;gap:10px}
+  .ajuda-item{border-top:1px solid var(--linha);padding-top:8px;margin-top:8px} .ajuda-item h3{margin:4px 0;font-size:16px;color:var(--azul-esc)}
+  .ajuda-item ol{margin:4px 0 6px;padding-left:20px} .ajuda-item li{margin:3px 0}
+  @media(max-width:600px){.topo .usuario{margin-left:0;text-align:left}.topo-acoes{width:100%}.abas button{padding:8px 12px;font-size:14px}}
 </style>
 </head>
 <body>

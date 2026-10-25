@@ -102,3 +102,46 @@ export function ordenarTurmas(lista) {
 export function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+// ---------- login por usuário (sem e-mail) ----------
+// Quem não tem e-mail entra só com o nome de usuário; por baixo vira um e-mail interno.
+export const DOMINIO_INTERNO = '@usuarios.artedecrescer.app';
+export function loginParaEmail(v) {
+  const s = String(v || '').trim().toLowerCase();
+  if (!s) return s;
+  if (s.includes('@')) return s;
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9._-]/g, '') + DOMINIO_INTERNO;
+}
+export function emailParaLogin(e) {
+  const s = String(e || '');
+  return s.endsWith(DOMINIO_INTERNO) ? s.slice(0, -DOMINIO_INTERNO.length) : s;
+}
+export const ehUsuarioInterno = e => String(e || '').endsWith(DOMINIO_INTERNO);
+
+// ---------- planejamentos ----------
+export const STATUS_PLAN = {
+  enviado:  { nome: 'Enviado', cls: 'st-enviado', dica: 'Aguardando a coordenação' },
+  visto:    { nome: 'Visto', cls: 'st-visto', dica: 'A coordenação já abriu' },
+  aprovado: { nome: 'Aprovado', cls: 'st-aprovado', dica: 'Tudo certo' },
+  ajustar:  { nome: 'Ajustar', cls: 'st-ajustar', dica: 'A coordenação pediu ajustes' },
+};
+export const MAX_ARQUIVO = 6 * 1024 * 1024;      // 6 MB
+export const TAM_PARTE = 700 * 1024;             // cada parte vira ~930 KB em base64 (limite do Firestore: 1 MB)
+export function tamanhoLegivel(b) { return b < 1024 * 1024 ? Math.max(1, Math.round(b / 1024)) + ' KB' : (b / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' MB'; }
+export function bufParaB64(buf) {
+  const u = new Uint8Array(buf); let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+export function b64ParaBytes(b64) { const s = atob(b64); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+export async function fatiarArquivo(file) {
+  const buf = await file.arrayBuffer(); const partes = [];
+  for (let i = 0; i < buf.byteLength; i += TAM_PARTE) partes.push(bufParaB64(buf.slice(i, i + TAM_PARTE)));
+  if (!partes.length) partes.push('');
+  return partes;
+}
+export function dataBR(v) {
+  const d = v && v.toDate ? v.toDate() : (v ? new Date(v) : null);
+  if (!d || isNaN(d)) return '';
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}

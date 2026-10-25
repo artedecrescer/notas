@@ -1,6 +1,6 @@
-# Sistema de Notas e Boletins — Colégio Arte de Crescer
+# Notas e Planejamentos — Colégio Arte de Crescer
 
-Sistema web para lançamento de notas e faltas e emissão de boletins, com login individual para cada professor.
+Sistema web para lançamento de notas e faltas, emissão de boletins e envio privado de planejamentos à coordenação, com login individual para cada professor.
 
 - **Site:** GitHub Pages (gratuito).
 - **Logins e banco de dados:** Firebase, do Google, no plano gratuito *Spark* (sem cartão de crédito).
@@ -73,6 +73,11 @@ O sistema gera uma mensagem pronta, com endereço, e-mail e senha provisória, p
 ---
 
 ## Uso no dia a dia
+
+- **Início:** cada pessoa vê o que falta lançar no bimestre e a situação dos seus planejamentos. Clicar num quadradinho abre direto a turma e a disciplina.
+- **Planejamentos:** a professora envia o arquivo (Word ou PDF, até 6 MB); só ela e a coordenação veem. A coordenação baixa (o envio vira *Visto*), aprova ou pede ajuste com comentário. O arquivo fica guardado em partes no próprio banco de dados, porque o armazenamento de arquivos do Firebase exige plano pago.
+- **Login por usuário:** quem não tem e-mail pode entrar só com um nome de usuário (ex.: `laiza`). Nesse caso, se esquecer a senha, a coordenação desativa o acesso e cria outro.
+- **Minha senha** e **Ajuda** ficam no alto da tela.
 
 - **Lançar notas:** escolha a turma, a disciplina e o bimestre. Tudo é **salvo automaticamente**, e a tecla Enter desce para o próximo aluno.
 - **Pendências** (coordenação): um quadro de turmas por disciplinas mostra o que já foi lançado em cada bimestre.

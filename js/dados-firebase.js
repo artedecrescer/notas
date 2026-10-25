@@ -12,12 +12,14 @@ const ERROS = {
   'auth/wrong-password': 'E-mail ou senha incorretos.',
   'auth/user-not-found': 'E-mail ou senha incorretos.',
   'auth/invalid-email': 'E-mail inválido.',
-  'auth/email-already-in-use': 'Já existe uma conta com este e-mail.',
+  'auth/email-already-in-use': 'Já existe uma conta com este e-mail ou usuário.',
   'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
   'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos e tente de novo.',
   'auth/network-request-failed': 'Sem conexão com a internet.',
   'permission-denied': 'Você não tem permissão para esta ação.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.',
+  'auth/requires-recent-login': 'Por segurança, saia e entre de novo antes de trocar a senha.',
+  'usuario-sem-email': 'Quem entra com nome de usuário não recebe e-mail. Peça à coordenação para cadastrar uma senha nova.',
 };
 export function msgErro(e) {
   const c = e && (e.code || '').replace(/^firestore\//, '');
@@ -59,9 +61,18 @@ export function criarApiFirebase(config) {
       });
     },
     async recarregarPerfil() { return lerPerfil(auth.currentUser); },
-    async login(email, senha) { await signInWithEmailAndPassword(auth, email.trim(), senha); },
+    async login(email, senha) { await signInWithEmailAndPassword(auth, loginParaEmail(email), senha); },
     async logout() { await signOut(auth); },
-    async resetSenha(email) { await sendPasswordResetEmail(auth, email.trim()); },
+    async resetSenha(email) {
+      const e = loginParaEmail(email);
+      if (ehUsuarioInterno(e)) { const er = new Error('sem e-mail'); er.code = 'usuario-sem-email'; throw er; }
+      await sendPasswordResetEmail(auth, e);
+    },
+    async trocarSenha(atual, nova) {
+      const u = auth.currentUser;
+      await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, atual));
+      await updatePassword(u, nova);
+    },
 
     // ---------- primeiro acesso ----------
     async setupFeito() { return (await getDoc(doc(db, 'config', 'setup'))).exists(); },
@@ -121,10 +132,11 @@ export function criarApiFirebase(config) {
       const sec = initializeApp(config, 'sec-' + Date.now());
       try {
         const secAuth = getAuth(sec);
-        const cred = await createUserWithEmailAndPassword(secAuth, email.trim(), senha);
+        const em = loginParaEmail(email);
+        const cred = await createUserWithEmailAndPassword(secAuth, em, senha);
         await signOut(secAuth);
         await setDoc(doc(db, 'users', cred.user.uid), {
-          nome, email: email.trim(), role, turmas: turmas || [], ativo: true,
+          nome, email: em, role, turmas: turmas || [], ativo: true,
         });
         return cred.user.uid;
       } finally { await deleteApp(sec).catch(() => {}); }
@@ -151,6 +163,32 @@ export function criarApiFirebase(config) {
     async getPlanilhasBimestre(bim) {
       const s = await getDocs(query(collection(db, 'planilhas'), where('bim', '==', Number(bim))));
       return s.docs.map(d => d.data());
+    },
+
+    // ---------- planejamentos (arquivo guardado em partes dentro do próprio banco) ----------
+    async enviarPlanejamento(meta, partes) {
+      const id = novoId(); const u = usuarioAtual;
+      const b = writeBatch(db);
+      b.set(doc(db, 'planejamentos', id), { ...meta, autorUid: u.uid, partes: partes.length, status: 'enviado', comentario: '', enviadoEm: serverTimestamp() });
+      partes.forEach((d, i) => b.set(doc(db, 'planejamentos', id, 'partes', String(i)), { d }));
+      await b.commit(); return id;
+    },
+    async listarPlanejamentos(todos) {
+      const q = todos ? collection(db, 'planejamentos') : query(collection(db, 'planejamentos'), where('autorUid', '==', usuarioAtual.uid));
+      const s = await getDocs(q);
+      return s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => ((b.enviadoEm && b.enviadoEm.seconds) || 9e9) - ((a.enviadoEm && a.enviadoEm.seconds) || 9e9));
+    },
+    async baixarPartes(id, n) {
+      const ss = await Promise.all(Array.from({ length: n }, (_, i) => getDoc(doc(db, 'planejamentos', id, 'partes', String(i)))));
+      return ss.map(s => (s.exists() ? s.data().d : ''));
+    },
+    async avaliarPlanejamento(id, dados) {
+      await updateDoc(doc(db, 'planejamentos', id), { ...dados, avaliadoEm: serverTimestamp(), avaliadoPor: usuarioAtual.uid });
+    },
+    async excluirPlanejamento(id, n) {
+      const b = writeBatch(db);
+      for (let i = 0; i < n; i++) b.delete(doc(db, 'planejamentos', id, 'partes', String(i)));
+      b.delete(doc(db, 'planejamentos', id)); await b.commit();
     },
 
     // ---------- backup ----------

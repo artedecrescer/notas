@@ -62,11 +62,37 @@ await t('titular ainda LÊ bimestre fechado', assertSucceeds(T.doc('planilhas/' 
 await t('titular edita bimestre aberto (4º)', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 4)).set({ turmaId: 't1', disc: 'portugues', bim: 4, alunos: {} })));
 await t('admin edita bimestre fechado', assertSucceeds(A.doc('planilhas/' + P('t1', 'portugues', 3)).set({ turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 7 } } }, { merge: true })));
 
+
+console.log('— Planejamentos (privados entre professoras)');
+await t('admin cria segunda titular', assertSucceeds(A.doc('users/T2').set({ nome: 'Tit2', role: 'titular', turmas: ['t2'], ativo: true })));
+const T2 = db('T2');
+const meta = (autor, extra = {}) => ({ autorUid: autor, autorNome: 'x', turmas: ['t2'], periodo: 'Quinzena 1', nomeArquivo: 'p.docx', tipo: 'x', tamanho: 10, partes: 1, status: 'enviado', comentario: '', ...extra });
+await t('titular envia planejamento (doc + parte, em lote)', assertSucceeds((() => { const b = T2.batch();
+  b.set(T2.doc('planejamentos/p1'), meta('T2')); b.set(T2.doc('planejamentos/p1/partes/0'), { d: 'QUJD' }); return b.commit(); })()));
+await t('NÃO envia em nome de outra pessoa', assertFails(T2.doc('planejamentos/p2').set(meta('I'))));
+await t('NÃO envia já aprovado', assertFails(T2.doc('planejamentos/p3').set(meta('T2', { status: 'aprovado' }))));
+await t('autora lê o próprio', assertSucceeds(T2.doc('planejamentos/p1').get()));
+await t('autora baixa o arquivo', assertSucceeds(T2.doc('planejamentos/p1/partes/0').get()));
+await t('autora lista os próprios', assertSucceeds(T2.collection('planejamentos').where('autorUid', '==', 'T2').get()));
+await t('autora NÃO lista todos', assertFails(T2.collection('planejamentos').get()));
+await t('autora NÃO se autoaprova', assertFails(T2.doc('planejamentos/p1').update({ status: 'aprovado' })));
+await t('colega NÃO lê o planejamento da outra', assertFails(I.doc('planejamentos/p1').get()));
+await t('colega NÃO baixa o arquivo da outra', assertFails(I.doc('planejamentos/p1/partes/0').get()));
+await t('colega NÃO lista os da outra', assertFails(I.collection('planejamentos').where('autorUid', '==', 'T2').get()));
+await t('colega NÃO injeta parte no da outra', assertFails(I.doc('planejamentos/p1/partes/1').set({ d: 'x' })));
+await t('coordenação lista todos', assertSucceeds(A.collection('planejamentos').get()));
+await t('coordenação baixa o arquivo', assertSucceeds(A.doc('planejamentos/p1/partes/0').get()));
+await t('coordenação pede ajuste com comentário', assertSucceeds(A.doc('planejamentos/p1').update({ status: 'ajustar', comentario: 'Faltou BNCC' })));
+await t('coordenação NÃO troca a autora', assertFails(A.doc('planejamentos/p1').update({ autorUid: 'I' })));
+await t('autora NÃO apaga depois de avaliado', assertFails(T2.doc('planejamentos/p1').delete()));
+await t('coordenação apaga', assertSucceeds((() => { const b = A.batch(); b.delete(A.doc('planejamentos/p1/partes/0')); b.delete(A.doc('planejamentos/p1')); return b.commit(); })()));
+
 console.log('— Conta desativada e conta sem perfil');
 await t('admin desativa a titular', assertSucceeds(A.doc('users/T').update({ ativo: false })));
 await t('titular desativada NÃO lê turmas', assertFails(T.collection('turmas').get()));
 await t('titular desativada NÃO lança', assertFails(T.doc('planilhas/' + P('t1', 'portugues', 4)).set({ turmaId: 't1', disc: 'portugues', bim: 4, alunos: {} })));
 await t('conta sem perfil NÃO lê turmas', assertFails(db('X').collection('turmas').get()));
+await t('desativada NÃO envia planejamento', assertFails(T.doc('planejamentos/p9').set(meta('T'))));
 await t('conta sem perfil NÃO lê alunos', assertFails(db('X').collection('alunos').where('turmaId', '==', 't1').get()));
 await t('admin NÃO apaga a si mesmo', assertFails(A.doc('users/A').delete()));
 
