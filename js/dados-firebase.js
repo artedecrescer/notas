@@ -79,10 +79,11 @@ export function criarApiFirebase(config) {
     async setupInicial({ escola, ano, coordenadora, nome, email, senha }) {
       bloquearCallback = true;
       try {
-        const cred = await createUserWithEmailAndPassword(auth, email.trim(), senha);
+        const em = loginParaEmail(email);
+        const cred = await createUserWithEmailAndPassword(auth, em, senha);
         const uid = cred.user.uid;
         const b = writeBatch(db);
-        b.set(doc(db, 'users', uid), { nome, email: email.trim(), role: 'admin', turmas: [], ativo: true });
+        b.set(doc(db, 'users', uid), { nome, email: em, role: 'admin', turmas: [], ativo: true });
         b.set(doc(db, 'config', 'setup'), { criadoEm: serverTimestamp(), por: uid });
         await b.commit();
         await setDoc(doc(db, 'config', 'escola'), {

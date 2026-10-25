@@ -10,8 +10,8 @@
 //  os dados são as regras de segurança (arquivo firestore.rules).
 // ============================================================================
 export const firebaseConfig = {
-  apiKey: "COLE_AQUI",
-  authDomain: "COLE_AQUI",
-  projectId: "COLE_AQUI",
-  appId: "COLE_AQUI"
+  apiKey: "AIzaSyAw1R6Fd-NrSNHU8j0M9icbpd2U0zot1fs",
+  authDomain: "notas-arte-de-crescer.firebaseapp.com",
+  projectId: "notas-arte-de-crescer",
+  appId: "1:605810384936:web:90f7b9b1156c7b3549151d"
 };

@@ -129,7 +129,7 @@ function telaSetup() {
       <input id="s-ano" placeholder="Ano letivo" value="${new Date().getFullYear()}" required>
       <input id="s-coord" placeholder="Coordenadora pedagógica (nome que sai no boletim)">
       <input id="s-nome" placeholder="Seu nome" required>
-      <input id="s-email" type="email" placeholder="Seu e-mail" required>
+      <input id="s-email" placeholder="Seu usuário (ex.: goncalina) ou e-mail" autocapitalize="none" required>
       <input id="s-senha" type="password" placeholder="Senha (mínimo 6 caracteres)" required>
       <input id="s-senha2" type="password" placeholder="Repita a senha" required>
       <button class="primario" type="submit">Criar conta da coordenação</button>
