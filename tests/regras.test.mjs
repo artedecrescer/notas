@@ -8,7 +8,7 @@ const env = await initializeTestEnvironment({ projectId: 'demo-notas',
 let ok = 0, falhas = [];
 async function t(nome, p) { try { await p; ok++; console.log('  ✓', nome); } catch (e) { falhas.push(nome); console.log('  ✗', nome, '-', e.message.split('\n')[0]); } }
 const db = uid => (uid ? env.authenticatedContext(uid) : env.unauthenticatedContext()).firestore();
-const P = (t, d, b) => `${t}__${d}__${b}`;
+const P = (t, d, b, ano = '2026') => `${ano}__${t}__${d}__${b}`;
 
 console.log('— Primeiro acesso (bootstrap)');
 await t('anônimo lê config/setup', assertSucceeds(db().doc('config/setup').get()));
@@ -21,7 +21,7 @@ await t('B NÃO recria setup', assertFails((() => { const d = db('B'); const b =
 
 console.log('— Admin monta a escola');
 const A = db('A');
-await t('admin cria config/escola', assertSucceeds(A.doc('config/escola').set({ nome: 'E', travas: { '1': false, '2': false, '3': false, '4': false } })));
+await t('admin cria config/escola', assertSucceeds(A.doc('config/escola').set({ nome: 'E', ano: '2026', travas: { '1': false, '2': false, '3': false, '4': false } })));
 await t('admin cria turmas', assertSucceeds(Promise.all([A.doc('turmas/t1').set({ nome: '1º' }), A.doc('turmas/t2').set({ nome: '2º' })])));
 await t('admin cria alunos', assertSucceeds(Promise.all([A.doc('alunos/a1').set({ nome: 'Ana', turmaId: 't1' }), A.doc('alunos/a2').set({ nome: 'Bia', turmaId: 't2' })])));
 await t('admin cria titular e inglês', assertSucceeds(Promise.all([
@@ -32,14 +32,14 @@ await t('admin lista usuários', assertSucceeds(A.collection('users').get()));
 console.log('— Titular (turma t1)');
 const T = db('T');
 await t('lê planilha vazia da sua turma', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 3)).get()));
-await t('lança Português na sua turma', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 3)).set({ turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 6, atv: 3 } } }, { merge: true })));
-await t('NÃO lança Inglês', assertFails(T.doc('planilhas/' + P('t1', 'ingles', 3)).set({ turmaId: 't1', disc: 'ingles', bim: 3, alunos: {} })));
-await t('NÃO lança em outra turma', assertFails(T.doc('planilhas/' + P('t2', 'portugues', 3)).set({ turmaId: 't2', disc: 'portugues', bim: 3, alunos: {} })));
+await t('lança Português na sua turma', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 3)).set({ ano: '2026', turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 6, atv: 3 } } }, { merge: true })));
+await t('NÃO lança Inglês', assertFails(T.doc('planilhas/' + P('t1', 'ingles', 3)).set({ ano: '2026', turmaId: 't1', disc: 'ingles', bim: 3, alunos: {} })));
+await t('NÃO lança em outra turma', assertFails(T.doc('planilhas/' + P('t2', 'portugues', 3)).set({ ano: '2026', turmaId: 't2', disc: 'portugues', bim: 3, alunos: {} })));
 await t('NÃO lê planilha de outra turma', assertFails(T.doc('planilhas/' + P('t2', 'portugues', 3)).get()));
-await t('NÃO falsifica turma no conteúdo', assertFails(T.doc('planilhas/' + P('t1', 'matematica', 3)).set({ turmaId: 't2', disc: 'matematica', bim: 3, alunos: {} })));
-await t('NÃO usa disciplina inventada', assertFails(T.doc('planilhas/' + P('t1', 'xadrez', 3)).set({ turmaId: 't1', disc: 'xadrez', bim: 3, alunos: {} })));
-await t('lista planilhas da sua turma', assertSucceeds(T.collection('planilhas').where('turmaId', '==', 't1').get()));
-await t('NÃO lista planilhas de outra turma', assertFails(T.collection('planilhas').where('turmaId', '==', 't2').get()));
+await t('NÃO falsifica turma no conteúdo', assertFails(T.doc('planilhas/' + P('t1', 'matematica', 3)).set({ ano: '2026', turmaId: 't2', disc: 'matematica', bim: 3, alunos: {} })));
+await t('NÃO usa disciplina inventada', assertFails(T.doc('planilhas/' + P('t1', 'xadrez', 3)).set({ ano: '2026', turmaId: 't1', disc: 'xadrez', bim: 3, alunos: {} })));
+await t('lista planilhas da sua turma', assertSucceeds(T.collection('planilhas').where('ano', '==', '2026').where('turmaId', '==', 't1').get()));
+await t('NÃO lista planilhas de outra turma', assertFails(T.collection('planilhas').where('ano', '==', '2026').where('turmaId', '==', 't2').get()));
 await t('lista alunos da sua turma', assertSucceeds(T.collection('alunos').where('turmaId', '==', 't1').get()));
 await t('NÃO lista alunos de outra turma', assertFails(T.collection('alunos').where('turmaId', '==', 't2').get()));
 await t('NÃO lista usuários', assertFails(T.collection('users').get()));
@@ -49,9 +49,9 @@ await t('NÃO altera dados da escola', assertFails(T.doc('config/escola').update
 
 console.log('— Professor de Inglês');
 const I = db('I');
-await t('lança Inglês na t1', assertSucceeds(I.doc('planilhas/' + P('t1', 'ingles', 3)).set({ turmaId: 't1', disc: 'ingles', bim: 3, alunos: { a1: { prova: 7, atv: 3 } } })));
-await t('lança Inglês na t2', assertSucceeds(I.doc('planilhas/' + P('t2', 'ingles', 3)).set({ turmaId: 't2', disc: 'ingles', bim: 3, alunos: {} })));
-await t('NÃO lança Português', assertFails(I.doc('planilhas/' + P('t1', 'portugues', 3)).set({ turmaId: 't1', disc: 'portugues', bim: 3, alunos: {} })));
+await t('lança Inglês na t1', assertSucceeds(I.doc('planilhas/' + P('t1', 'ingles', 3)).set({ ano: '2026', turmaId: 't1', disc: 'ingles', bim: 3, alunos: { a1: { prova: 7, atv: 3 } } })));
+await t('lança Inglês na t2', assertSucceeds(I.doc('planilhas/' + P('t2', 'ingles', 3)).set({ ano: '2026', turmaId: 't2', disc: 'ingles', bim: 3, alunos: {} })));
+await t('NÃO lança Português', assertFails(I.doc('planilhas/' + P('t1', 'portugues', 3)).set({ ano: '2026', turmaId: 't1', disc: 'portugues', bim: 3, alunos: {} })));
 await t('NÃO lê Português', assertFails(I.doc('planilhas/' + P('t1', 'portugues', 3)).get()));
 await t('lista alunos de qualquer turma', assertSucceeds(I.collection('alunos').where('turmaId', '==', 't2').get()));
 
@@ -60,10 +60,10 @@ await t('titular lê Inglês da sua turma', assertSucceeds(T.doc('planilhas/' + 
 
 console.log('— Fechamento de bimestre');
 await t('admin fecha o 3º bimestre', assertSucceeds(A.doc('config/escola').set({ travas: { '3': true } }, { merge: true })));
-await t('titular NÃO edita bimestre fechado', assertFails(T.doc('planilhas/' + P('t1', 'portugues', 3)).set({ turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 1 } } }, { merge: true })));
+await t('titular NÃO edita bimestre fechado', assertFails(T.doc('planilhas/' + P('t1', 'portugues', 3)).set({ ano: '2026', turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 1 } } }, { merge: true })));
 await t('titular ainda LÊ bimestre fechado', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 3)).get()));
-await t('titular edita bimestre aberto (4º)', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 4)).set({ turmaId: 't1', disc: 'portugues', bim: 4, alunos: {} })));
-await t('admin edita bimestre fechado', assertSucceeds(A.doc('planilhas/' + P('t1', 'portugues', 3)).set({ turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 7 } } }, { merge: true })));
+await t('titular edita bimestre aberto (4º)', assertSucceeds(T.doc('planilhas/' + P('t1', 'portugues', 4)).set({ ano: '2026', turmaId: 't1', disc: 'portugues', bim: 4, alunos: {} })));
+await t('admin edita bimestre fechado', assertSucceeds(A.doc('planilhas/' + P('t1', 'portugues', 3)).set({ ano: '2026', turmaId: 't1', disc: 'portugues', bim: 3, alunos: { a1: { prova: 7 } } }, { merge: true })));
 
 
 console.log('— Planejamentos (privados entre professoras)');
@@ -101,7 +101,7 @@ await t('coordenação apaga', assertSucceeds((() => { const b = A.batch(); b.de
 console.log('— Conta desativada e conta sem perfil');
 await t('admin desativa a titular', assertSucceeds(A.doc('users/T').update({ ativo: false })));
 await t('titular desativada NÃO lê turmas', assertFails(T.collection('turmas').get()));
-await t('titular desativada NÃO lança', assertFails(T.doc('planilhas/' + P('t1', 'portugues', 4)).set({ turmaId: 't1', disc: 'portugues', bim: 4, alunos: {} })));
+await t('titular desativada NÃO lança', assertFails(T.doc('planilhas/' + P('t1', 'portugues', 4)).set({ ano: '2026', turmaId: 't1', disc: 'portugues', bim: 4, alunos: {} })));
 await t('conta sem perfil NÃO lê turmas', assertFails(db('X').collection('turmas').get()));
 await t('desativada NÃO envia planejamento', assertFails(T.doc('planejamentos/p9').set(meta('T'))));
 await t('conta sem perfil NÃO lê alunos', assertFails(db('X').collection('alunos').where('turmaId', '==', 't1').get()));
@@ -127,6 +127,41 @@ await t('conta nova cancela o antigo ainda enviado', assertSucceeds((() => { con
 await t('professora NÃO apaga acesso de outra', assertFails(I2.doc('users/T2').delete()));
 await t('admin exclui acesso + mapa', assertSucceeds((() => { const b = A.batch(); b.delete(A.doc('users/I2')); b.delete(A.doc('logins/ing')); return b.commit(); })()));
 
+
+console.log('— Anos letivos: notas nunca se perdem');
+const pl = (t, d, b, ano, alunos = {}) => ({ ano, turmaId: t, disc: d, bim: b, alunos });
+await t('NÃO grava sem o campo ano', assertFails(A.doc('planilhas/' + P('t1', 'artes', 1)).set({ turmaId: 't1', disc: 'artes', bim: 1, alunos: {} })));
+await t('NÃO grava com ano diferente do código', assertFails(A.doc('planilhas/' + P('t1', 'artes', 1)).set(pl('t1', 'artes', 1, '2025'))));
+await t('NÃO grava planilha no formato antigo (sem ano)', assertFails(A.doc('planilhas/t1__artes__1').set({ turmaId: 't1', disc: 'artes', bim: 1, alunos: {} })));
+await t('NINGUÉM apaga notas (nem a coordenação)', assertFails(A.doc('planilhas/' + P('t1', 'portugues', 3)).delete()));
+await t('titular NÃO lança no ano seguinte antes da virada', assertFails(T2.doc('planilhas/' + P('t2', 'portugues', 1, '2027')).set(pl('t2', 'portugues', 1, '2027'))));
+await t('NÃO muda o ano letivo direto na configuração', assertFails(A.doc('config/escola').update({ ano: '2027' })));
+await t('NÃO cria arquivo de ano que não é o atual', assertFails(A.doc('anos/2025').set({ ano: '2025' })));
+await t('NÃO pula ano mesmo arquivando', assertFails((() => { const b = A.batch(); b.set(A.doc('anos/2026'), { ano: '2026' }); b.update(A.doc('config/escola'), { ano: '2028' }); return b.commit(); })()));
+await t('professora NÃO faz a virada', assertFails((() => { const b = T2.batch(); b.set(T2.doc('anos/2026'), { ano: '2026' }); b.update(T2.doc('config/escola'), { ano: '2027' }); return b.commit(); })()));
+await t('aluno com matrícula só no ano atual pode ter cadastro apagado', assertSucceeds((async () => { await A.doc('alunos/engano').set({ nome: 'X', turmaId: 't1', matriculas: { '2026': 't1' } }); return A.doc('alunos/engano').delete(); })()));
+await t('admin registra matrícula de 2025 (histórico)', assertSucceeds(A.doc('alunos/a1').set({ matriculas: { '2025': 't1', '2026': 't1' } }, { merge: true })));
+await t('NÃO apaga cadastro de aluno com histórico', assertFails(A.doc('alunos/a1').delete()));
+await t('VIRADA: arquiva 2026 + alunos + ano 2027 (um lote)', assertSucceeds((() => { const b = A.batch();
+  b.set(A.doc('anos/2026'), { ano: '2026', escola: { coordenadora: 'C' }, turmas: { t1: { nome: '1º', professora: 'P' } } });
+  b.set(A.doc('alunos/a1'), { turmaId: 't2', matriculas: { '2026': 't1', '2027': 't2' } }, { merge: true });
+  b.update(A.doc('config/escola'), { ano: '2027', bimestreAtual: 1, travas: { '1': false, '2': false, '3': false, '4': false } }); return b.commit(); })()));
+await t('arquivo de 2026 NÃO pode ser alterado', assertFails(A.doc('anos/2026').update({ escola: { coordenadora: 'outra' } })));
+await t('arquivo de 2026 NÃO pode ser apagado', assertFails(A.doc('anos/2026').delete()));
+await t('NÃO volta para 2026', assertFails(A.doc('config/escola').update({ ano: '2026' })));
+await t('coordenação NÃO altera nota de 2026 encerrado', assertFails(A.doc('planilhas/' + P('t1', 'portugues', 3)).set(pl('t1', 'portugues', 3, '2026', { a1: { prova: 0 } }), { merge: true })));
+await t('coordenação NÃO apaga nota de 2026 encerrado', assertFails(A.doc('planilhas/' + P('t1', 'portugues', 3)).delete()));
+await t('coordenação LÊ notas de 2026 encerrado', assertSucceeds(A.doc('planilhas/' + P('t1', 'portugues', 3)).get()));
+await t('coordenação lista notas de 2026', assertSucceeds(A.collection('planilhas').where('ano', '==', '2026').get()));
+await t('coordenação REPÕE planilha de 2026 que faltava (backup)', assertSucceeds(A.doc('planilhas/' + P('t1', 'geografia', 2)).set(pl('t1', 'geografia', 2, '2026', { a1: { final: 8 } }))));
+await t('...mas NÃO altera depois de repor', assertFails(A.doc('planilhas/' + P('t1', 'geografia', 2)).set(pl('t1', 'geografia', 2, '2026', { a1: { final: 1 } }), { merge: true })));
+await t('titular NÃO lê 2026 encerrado', assertFails(T2.doc('planilhas/' + P('t2', 'portugues', 3)).get()));
+await t('titular NÃO lista 2026 encerrado', assertFails(T2.collection('planilhas').where('ano', '==', '2026').where('turmaId', '==', 't2').get()));
+await t('titular lança em 2027', assertSucceeds(T2.doc('planilhas/' + P('t2', 'portugues', 1, '2027')).set(pl('t2', 'portugues', 1, '2027', { a1: { prova: 6 } }), { merge: true })));
+await t('titular lista 2027 da sua turma', assertSucceeds(T2.collection('planilhas').where('ano', '==', '2027').where('turmaId', '==', 't2').get()));
+await t('admin cria professor de inglês I3', assertSucceeds(A.doc('users/I3').set({ nome: 'Ing3', role: 'ingles', turmas: [], ativo: true })));
+await t('inglês lança em 2027', assertSucceeds(db('I3').doc('planilhas/' + P('t1', 'ingles', 1, '2027')).set(pl('t1', 'ingles', 1, '2027'))));
+await t('inglês NÃO lê inglês de 2026 encerrado', assertFails(db('I3').doc('planilhas/' + P('t1', 'ingles', 3)).get()));
 console.log(`\nRESULTADO: ${ok} passaram, ${falhas.length} falharam`);
 if (falhas.length) console.log('FALHAS:', falhas);
 await env.cleanup();

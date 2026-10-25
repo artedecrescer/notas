@@ -5,7 +5,7 @@ import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs,
   writeBatch, serverTimestamp, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from '../vendor/firebase.js';
-import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno, emailParaLogin, emailVariante } from './comum.js';
+import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno, emailParaLogin, emailVariante, normalizarBackup } from './comum.js';
 
 const ERROS = {
   'auth/invalid-credential': 'E-mail ou senha incorretos.',
@@ -34,6 +34,9 @@ export function criarApiFirebase(config) {
   setPersistence(auth, browserLocalPersistence).catch(() => {});
   const db = getFirestore(app);
   let usuarioAtual = null;
+  let anoAtivo = null; // atualizado sempre que a configuração da escola é lida
+  // Ao gravar a turma de um aluno, registra também a matrícula no ano letivo em andamento.
+  const comMatricula = d => (d.turmaId && anoAtivo ? { ...d, matriculas: { [anoAtivo]: d.turmaId } } : d);
   let bloquearCallback = false;
 
   async function lerPerfil(user) {
@@ -113,7 +116,30 @@ export function criarApiFirebase(config) {
     },
 
     // ---------- escola ----------
-    async getEscola() { const s = await getDoc(doc(db, 'config', 'escola')); return s.exists() ? s.data() : {}; },
+    async getEscola() {
+      const s = await getDoc(doc(db, 'config', 'escola')); const e = s.exists() ? s.data() : {};
+      if (e.ano) anoAtivo = String(e.ano); return e;
+    },
+    async listarAnos() { // anos letivos encerrados (arquivo)
+      const s = await getDocs(collection(db, 'anos'));
+      return s.docs.map(d => ({ ...d.data(), ano: d.id })).sort((a, b) => b.ano.localeCompare(a.ano));
+    },
+    async registrarBackup() { await updateDoc(doc(db, 'config', 'escola'), { ultimoBackup: serverTimestamp() }); },
+    // Virada do ano letivo: arquiva o ano que termina, grava a nova turma de cada aluno e avança o ano.
+    // Tudo num único lote: ou acontece inteiro, ou nada muda. Nenhuma nota é tocada.
+    async iniciarAnoLetivo({ novoAno, arquivo, mudancas }) {
+      const atual = anoAtivo; if (String(Number(atual) + 1) !== String(novoAno)) throw new Error('Ano inválido.');
+      if (mudancas.length > 450) throw new Error('Muitos alunos para um único lote.');
+      const b = writeBatch(db);
+      b.set(doc(db, 'anos', atual), { ...arquivo, ano: atual, arquivadoEm: serverTimestamp(), arquivadoPor: usuarioAtual.uid });
+      mudancas.forEach(m => b.set(doc(db, 'alunos', m.id), {
+        turmaId: m.turmaId || '',
+        matriculas: { [atual]: m.turmaAnterior, [novoAno]: m.turmaId || '' },
+        ...(m.turmaId ? {} : { saida: { ano: atual, motivo: m.motivo || 'Concluiu / saiu na virada do ano' } }),
+      }, { merge: true }));
+      b.update(doc(db, 'config', 'escola'), { ano: String(novoAno), bimestreAtual: 1, travas: { '1': false, '2': false, '3': false, '4': false } });
+      await b.commit(); anoAtivo = String(novoAno);
+    },
     async salvarEscola(dados) { await setDoc(doc(db, 'config', 'escola'), dados, { merge: true }); },
 
     // ---------- turmas ----------
@@ -134,12 +160,21 @@ export function criarApiFirebase(config) {
     },
     async salvarAluno(a) {
       const id = a.id || novoId(); const { id: _, ...dados } = a;
-      await setDoc(doc(db, 'alunos', id), dados, { merge: true }); return id;
+      await setDoc(doc(db, 'alunos', id), comMatricula(dados), { merge: true }); return id;
     },
     async salvarAlunosEmLote(lista) {
-      await lotes(lista.map(a => { const id = a.id || novoId(); const { id: _, ...d } = a; return [doc(db, 'alunos', id), d]; }), true);
+      await lotes(lista.map(a => { const id = a.id || novoId(); const { id: _, ...d } = a; return [doc(db, 'alunos', id), comMatricula(d)]; }), true);
     },
-    async excluirAluno(id) { await deleteDoc(doc(db, 'alunos', id)); },
+    async excluirAluno(id) { await deleteDoc(doc(db, 'alunos', id)); }, // só para quem nunca teve nota (a tela confere)
+    async listarTodosAlunos() { // coordenação: todos, inclusive quem já saiu
+      return (await getDocs(collection(db, 'alunos'))).docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+    async registrarSaida(id, motivo) {
+      await setDoc(doc(db, 'alunos', id), { turmaId: '', saida: { ano: anoAtivo, motivo: motivo || '', em: serverTimestamp() } }, { merge: true });
+    },
+    async reativarAluno(id, turmaId) {
+      await setDoc(doc(db, 'alunos', id), { turmaId, saida: null, matriculas: { [anoAtivo]: turmaId } }, { merge: true });
+    },
 
     // ---------- usuários / professores ----------
     async listarUsuarios() {
@@ -192,24 +227,28 @@ export function criarApiFirebase(config) {
     async atualizarUsuario(uid, dados) { await updateDoc(doc(db, 'users', uid), dados); },
 
     // ---------- lançamentos (planilhas) ----------
-    async getPlanilha(turmaId, disc, bim) {
-      const s = await getDoc(doc(db, 'planilhas', planilhaId(turmaId, disc, bim)));
+    async getPlanilha(turmaId, disc, bim, ano = anoAtivo) {
+      const s = await getDoc(doc(db, 'planilhas', planilhaId(ano, turmaId, disc, bim)));
       return s.exists() ? s.data() : null;
     },
-    async salvarLancamento(turmaId, disc, bim, alunoId, valores) {
-      await setDoc(doc(db, 'planilhas', planilhaId(turmaId, disc, bim)), {
-        turmaId, disc, bim: Number(bim),
+    async salvarLancamento(turmaId, disc, bim, alunoId, valores) { // sempre no ano letivo em andamento
+      await setDoc(doc(db, 'planilhas', planilhaId(anoAtivo, turmaId, disc, bim)), {
+        ano: anoAtivo, turmaId, disc, bim: Number(bim),
         alunos: { [alunoId]: valores },
         atualizadoPor: usuarioAtual ? usuarioAtual.uid : null,
         atualizadoEm: serverTimestamp(),
       }, { merge: true });
     },
-    async getPlanilhasTurma(turmaId) {
-      const s = await getDocs(query(collection(db, 'planilhas'), where('turmaId', '==', turmaId)));
+    async getPlanilhasTurma(turmaId, ano = anoAtivo) {
+      const s = await getDocs(query(collection(db, 'planilhas'), where('ano', '==', String(ano)), where('turmaId', '==', turmaId)));
       return s.docs.map(d => d.data());
     },
-    async getPlanilhasBimestre(bim) {
-      const s = await getDocs(query(collection(db, 'planilhas'), where('bim', '==', Number(bim))));
+    async getPlanilhasBimestre(bim, ano = anoAtivo) {
+      const s = await getDocs(query(collection(db, 'planilhas'), where('ano', '==', String(ano)), where('bim', '==', Number(bim))));
+      return s.docs.map(d => d.data());
+    },
+    async getPlanilhasAno(ano) { // coordenação
+      const s = await getDocs(query(collection(db, 'planilhas'), where('ano', '==', String(ano))));
       return s.docs.map(d => d.data());
     },
 
@@ -247,25 +286,32 @@ export function criarApiFirebase(config) {
     // ---------- backup ----------
     async exportarTudo() {
       const ler = async (c) => (await getDocs(collection(db, c))).docs.map(d => ({ id: d.id, ...d.data() }));
-      const [turmas, alunos, planilhas, users] = await Promise.all([ler('turmas'), ler('alunos'), ler('planilhas'), ler('users')]);
-      planilhas.forEach(p => { delete p.atualizadoEm; });
+      const [turmas, alunos, planilhas, users, anos] = await Promise.all([ler('turmas'), ler('alunos'), ler('planilhas'), ler('users'), ler('anos')]);
+      const semData = o => { const r = { ...o }; ['atualizadoEm', 'arquivadoEm', 'ultimoBackup'].forEach(k => delete r[k]);
+        if (r.saida && r.saida.em) r.saida = { ...r.saida, em: null }; return r; };
       return {
-        formato: 'sistema-notas-adc', versao: 1, exportadoEm: new Date().toISOString(),
-        escola: await this.getEscola(), turmas, alunos, planilhas,
+        formato: 'sistema-notas-adc', versao: 2, exportadoEm: new Date().toISOString(),
+        escola: semData(await this.getEscola()), anos: anos.map(semData), turmas, alunos: alunos.map(semData), planilhas: planilhas.map(semData),
         professores: users.map(u => ({ nome: u.nome, email: u.email, role: u.role, turmas: u.turmas, ativo: u.ativo })),
       };
     },
+    // Importa um backup. Anos encerrados são somente leitura: só entram planilhas que estejam FALTANDO;
+    // as que já existem não são tocadas. Planilhas do ano em andamento são mescladas.
     async importarTudo(dados) {
+      if (!anoAtivo) await this.getEscola();
+      const n = normalizarBackup(dados, anoAtivo);
       const ops = [];
-      if (dados.escola) await setDoc(doc(db, 'config', 'escola'), dados.escola, { merge: true });
-      (dados.turmas || []).forEach(t => { const { id, ...d } = t; ops.push([doc(db, 'turmas', id), d]); });
-      (dados.alunos || []).forEach(a => { const { id, ...d } = a; ops.push([doc(db, 'alunos', id), d]); });
-      (dados.planilhas || []).forEach(p => {
+      if (Object.keys(n.escola).length) await setDoc(doc(db, 'config', 'escola'), n.escola, { merge: true });
+      n.turmas.forEach(t => { const { id, ...d } = t; ops.push([doc(db, 'turmas', id), d]); });
+      n.alunos.forEach(a => { const { id, ...d } = a; ops.push([doc(db, 'alunos', id), d]); });
+      let puladas = 0;
+      for (const p of n.planilhas) {
         const { id, ...d } = p;
-        ops.push([doc(db, 'planilhas', id || planilhaId(d.turmaId, d.disc, d.bim)), { ...d, bim: Number(d.bim) }]);
-      });
-      await lotes(ops);
-      return { turmas: (dados.turmas || []).length, alunos: (dados.alunos || []).length, planilhas: (dados.planilhas || []).length };
+        if (p.ano !== anoAtivo && (await getDoc(doc(db, 'planilhas', id))).exists()) { puladas++; continue; }
+        ops.push([doc(db, 'planilhas', id), d]);
+      }
+      await lotes(ops, true);
+      return { turmas: n.turmas.length, alunos: n.alunos.length, planilhas: n.planilhas.length - puladas, puladas };
     },
   };
 }

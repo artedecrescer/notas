@@ -28,14 +28,19 @@ export function linhasBoletim(alunoId, mapa) {
   });
 }
 
-export function gerarBoletinsPDF({ escola, turma, alunos, planilhas, logo, incluirObs }) {
+// Aceita uma turma inteira (escola, turma, alunos, planilhas) ou uma lista de itens prontos
+// (itens: [{ aluno, escola, turma, planilhas }]) — usada no histórico de vários anos do mesmo aluno.
+export function gerarBoletinsPDF({ escola: escola0, turma: turma0, alunos, planilhas, logo, incluirObs, itens }) {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
   const W = pdf.internal.pageSize.getWidth();
   const M = 12;
-  const mapa = indexarPlanilhas(planilhas);
+  const mapa0 = planilhas ? indexarPlanilhas(planilhas) : null;
+  const lista = itens || alunos.map(a => ({ aluno: a, escola: escola0, turma: turma0 }));
   const SLOT = [10, 152];
-  alunos.forEach((a, i) => {
+  lista.forEach((it, i) => {
+    const a = it.aluno, escola = it.escola || escola0, turma = it.turma || turma0;
+    const mapa = it.planilhas ? indexarPlanilhas(it.planilhas) : mapa0;
     if (i > 0 && i % 2 === 0) pdf.addPage();
     let y = SLOT[i % 2];
     if (i % 2 === 1) { // linha pontilhada de corte entre os dois boletins

@@ -83,7 +83,15 @@ export function notaFinal(e) {
   return f;
 }
 
-export function planilhaId(turmaId, disc, bim) { return `${turmaId}__${disc}__${bim}`; }
+// Código de uma planilha de notas: ANO__turma__disciplina__bimestre. O ano faz parte do código,
+// então as notas de um ano nunca são sobrescritas pelas do ano seguinte.
+export function planilhaId(ano, turmaId, disc, bim) { return `${ano}__${turmaId}__${disc}__${bim}`; }
+// Turma do aluno num ano letivo (o histórico fica em aluno.matriculas = { '2026': 'ano1', '2027': 'ano2' }).
+export function turmaNoAno(aluno, ano, anoAtivo) {
+  const m = (aluno && aluno.matriculas) || {};
+  if (m[ano] !== undefined) return m[ano] || null;
+  return String(ano) === String(anoAtivo) ? (aluno.turmaId || null) : null;
+}
 
 export function novoId() {
   const a = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -146,4 +154,27 @@ export function dataBR(v) {
   const d = v && v.toDate ? v.toDate() : (v ? new Date(v) : null);
   if (!d || isNaN(d)) return '';
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ---------- cópia de segurança ----------
+// Converte um backup (formato antigo ou novo) para o formato com ano: planilhas ANO__turma__disc__bim
+// e alunos com matriculas. Nada é descartado; o ano do arquivo antigo vem de escola.ano do próprio backup.
+export function normalizarBackup(dados, anoAtivo) {
+  const anoArq = String((dados.escola && dados.escola.ano) || anoAtivo);
+  const planilhas = []; const vistos = new Set();
+  (dados.planilhas || []).forEach(p => {
+    const partes = String(p.id || '').split('__');
+    const ano = partes.length === 4 ? partes[0] : String(p.ano || anoArq);
+    const id = planilhaId(ano, p.turmaId, p.disc, Number(p.bim));
+    if (vistos.has(id)) return; vistos.add(id);
+    const { id: _, ...d } = p;
+    planilhas.push({ id, ...d, ano, bim: Number(d.bim) });
+  });
+  const alunos = (dados.alunos || []).map(a => {
+    const m = { ...(a.matriculas || {}) };
+    if (a.turmaId && m[anoArq] === undefined) m[anoArq] = a.turmaId;
+    return { ...a, matriculas: m };
+  });
+  const escola = { ...(dados.escola || {}) }; delete escola.ano; // o ano letivo só muda pela virada de ano
+  return { escola, turmas: dados.turmas || [], alunos, planilhas, anos: dados.anos || [] };
 }
