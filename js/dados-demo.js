@@ -211,6 +211,7 @@ export function criarApiDemo() {
         planilhas: Object.entries(st.planilhas).map(([id, p]) => ({ id, ...p })),
         professores: Object.values(st.users).map(u => ({ nome: u.nome, email: u.email, role: u.role, turmas: u.turmas, ativo: u.ativo })) };
     },
+    async migrarParaAnos() { return { copiadas: 0, conferidas: 0, diferentes: [] }; },
     async importarTudo(d) {
       exigirAdmin(); const n = normalizarBackup(d, anoAt());
       if (!n.antigo) st.escola = { ...st.escola, ...n.escola };

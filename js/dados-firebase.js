@@ -124,6 +124,34 @@ export function criarApiFirebase(config) {
       const s = await getDocs(collection(db, 'anos'));
       return s.docs.map(d => ({ ...d.data(), ano: d.id })).sort((a, b) => b.ano.localeCompare(a.ano));
     },
+    // Migração única para o formato com ano: COPIA cada planilha antiga (turma__disc__bim) para
+    // ANO__turma__disc__bim e registra a matrícula do ano em cada aluno. As antigas não são apagadas.
+    // Pode rodar quantas vezes for preciso: só copia o que ainda não existe e confere tudo no fim.
+    async migrarParaAnos() {
+      if (!anoAtivo) await this.getEscola();
+      const ano = anoAtivo; if (!ano) return { copiadas: 0, conferidas: 0 };
+      const todas = (await getDocs(collection(db, 'planilhas'))).docs.map(d => ({ id: d.id, ...d.data() }));
+      const legado = todas.filter(p => p.id.split('__').length === 3);
+      const existentes = new Set(todas.filter(p => p.id.split('__').length === 4).map(p => p.id));
+      const ops = [];
+      legado.forEach(p => {
+        const nid = planilhaId(ano, p.turmaId, p.disc, Number(p.bim));
+        if (existentes.has(nid)) return;
+        const { id: _, ...d } = p; ops.push([doc(db, 'planilhas', nid), { ...d, ano, bim: Number(p.bim) }]);
+      });
+      const alunos = (await getDocs(collection(db, 'alunos'))).docs.map(d => ({ id: d.id, ...d.data() }));
+      alunos.filter(a => a.turmaId && !(a.matriculas && a.matriculas[ano])).forEach(a => ops.push([doc(db, 'alunos', a.id), { matriculas: { [ano]: a.turmaId } }]));
+      if (ops.length) await lotes(ops, true);
+      // Conferência: cada planilha antiga tem que ter a cópia com as mesmas notas.
+      const depois = new Map((await getDocs(query(collection(db, 'planilhas'), where('ano', '==', ano)))).docs.map(d => [d.id, d.data()]));
+      const canon = o => JSON.stringify(Object.keys(o || {}).sort().map(k => [k, Object.keys(o[k] || {}).sort().map(c => [c, o[k][c]])]));
+      const diferentes = legado.filter(p => {
+        const nid = planilhaId(ano, p.turmaId, p.disc, Number(p.bim));
+        if (existentes.has(nid)) return false;            // já existia antes: pode ter sido editada depois, não compara
+        const n = depois.get(nid); return !n || canon(n.alunos) !== canon(p.alunos);
+      });
+      return { copiadas: ops.length, conferidas: legado.length, diferentes: diferentes.map(p => p.id) };
+    },
     async registrarBackup() { await updateDoc(doc(db, 'config', 'escola'), { ultimoBackup: serverTimestamp() }); },
     // Virada do ano letivo: arquiva o ano que termina, grava a nova turma de cada aluno e avança o ano.
     // Tudo num único lote: ou acontece inteiro, ou nada muda. Nenhuma nota é tocada.

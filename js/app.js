@@ -57,6 +57,12 @@ window.addEventListener('beforeunload', e => { if (fila.pend > 0) { e.preventDef
 // ---------------- dados base ----------------
 async function carregarBase() {
   S.escola = (await api.getEscola()) || {};
+  if (isAdmin(S.perfil) && !S.migrado) {   // uma vez por sessão: copia notas do formato antigo (não apaga nada)
+    S.migrado = true;
+    try { const r = await api.migrarParaAnos(); if (r.copiadas) toast(`Notas organizadas por ano letivo (${r.conferidas} planilhas conferidas).`);
+      if (r.diferentes && r.diferentes.length) console.error('Migração: planilhas a conferir', r.diferentes); }
+    catch (e) { console.error('Migração', e); S.migrado = false; }
+  }
   S.turmas = await api.listarTurmas();
   S.alunosCache = {}; TODOS = null; ANOS = null;
   const ts = turmasDoPerfil(S.perfil, S.turmas), ds = disciplinasDoPerfil(S.perfil);
