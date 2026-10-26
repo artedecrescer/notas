@@ -25,9 +25,10 @@ service cloud.firestore {
     function podeEditar(turmaId, disc) {
       return isAdmin() || (titularDa(turmaId) && disc != 'ingles') || (isIngles() && disc == 'ingles');
     }
-    function travado(bim) {
-      return get(/databases/$(database)/documents/config/escola).data.get('travas', {}).get(bim, false) == true;
-    }
+    function escola() { return get(/databases/$(database)/documents/config/escola).data; }
+    // Ano letivo em andamento ("2026"). Só ele recebe lançamentos; os anteriores ficam só para consulta.
+    function anoAtivo() { return string(escola().ano); }
+    function travado(bim) { return escola().get('travas', {}).get(bim, false) == true; }
     function discValida(d) {
       return d in ['portugues', 'matematica', 'ciencias', 'historia', 'geografia', 'ingles', 'artes', 'edfisica'];
     }
@@ -39,9 +40,24 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
+    // O ano letivo só anda para a frente, de um em um, e só se o ano que termina foi arquivado
+    // no mesmo lote (anos/{ano}). Assim ninguém "volta" um ano nem pula o arquivamento.
     match /config/escola {
       allow get: if ativo();
-      allow write: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+        && (string(request.resource.data.ano) == string(resource.data.ano)
+            || (int(request.resource.data.ano) == int(resource.data.ano) + 1
+                && existsAfter(/databases/$(database)/documents/anos/$(string(resource.data.ano)))));
+      allow delete: if false;
+    }
+
+    // Arquivo de cada ano letivo encerrado (dados da escola, turmas e professoras daquele ano).
+    // Criado uma única vez, na virada do ano, e nunca mais alterado ou apagado.
+    match /anos/{ano} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && ano == anoAtivo() && string(request.resource.data.ano) == ano;
+      allow update, delete: if false;
     }
 
     match /users/{uid} {
@@ -71,28 +87,40 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Aluno que sai da escola não é apagado: fica com turmaId vazio e o histórico em matriculas.
+    // Só dá para apagar quem nunca esteve matriculado num ano anterior (ex.: cadastro feito por engano).
     match /alunos/{id} {
       allow read: if isAdmin() || isIngles() || titularDa(resource.data.turmaId);
-      allow write: if isAdmin();
+      allow create, update: if isAdmin();
+      allow delete: if isAdmin() && resource.data.get('matriculas', {}).keys().hasOnly([anoAtivo()]);
     }
 
-    // Uma planilha = turma + disciplina + bimestre. Código: turmaId__disciplina__bimestre
+    // Uma planilha = ano + turma + disciplina + bimestre. Código: ANO__turma__disciplina__bimestre.
+    // Notas NUNCA são apagadas. Anos encerrados ficam somente leitura (a coordenação só pode
+    // recriar uma planilha que esteja faltando, a partir da cópia de segurança, nunca alterar).
     match /planilhas/{pid} {
-      allow get: if pid.split('__').size() == 3
-        && podeVer(pid.split('__')[0], pid.split('__')[1]);
+      function p() { return pid.split('__'); }
+      function valida() {
+        return p().size() == 4
+          && discValida(p()[2])
+          && p()[3] in ['1', '2', '3', '4']
+          && string(request.resource.data.ano) == p()[0]
+          && request.resource.data.turmaId == p()[1]
+          && request.resource.data.disc == p()[2]
+          && string(request.resource.data.bim) == p()[3]
+          && request.resource.data.alunos is map;
+      }
+      function editavelAgora() {
+        return p()[0] == anoAtivo() && podeEditar(p()[1], p()[2]) && (isAdmin() || !travado(p()[3]));
+      }
+      allow get: if (p().size() == 4 && (isAdmin() || (p()[0] == anoAtivo() && podeVer(p()[1], p()[2]))))
+        || (p().size() == 3 && isAdmin());
       allow list: if isAdmin()
-        || titularDa(resource.data.turmaId)
-        || (isIngles() && resource.data.disc == 'ingles');
-      allow create, update: if pid.split('__').size() == 3
-        && discValida(pid.split('__')[1])
-        && pid.split('__')[2] in ['1', '2', '3', '4']
-        && podeEditar(pid.split('__')[0], pid.split('__')[1])
-        && request.resource.data.turmaId == pid.split('__')[0]
-        && request.resource.data.disc == pid.split('__')[1]
-        && string(request.resource.data.bim) == pid.split('__')[2]
-        && request.resource.data.alunos is map
-        && (isAdmin() || !travado(pid.split('__')[2]));
-      allow delete: if isAdmin();
+        || (string(resource.data.ano) == anoAtivo()
+            && (titularDa(resource.data.turmaId) || (isIngles() && resource.data.disc == 'ingles')));
+      allow create: if valida() && (editavelAgora() || (isAdmin() && p()[0] != anoAtivo()));
+      allow update: if valida() && editavelAgora();
+      allow delete: if false;
     }
       // Planejamentos: cada professora vê só os próprios; a coordenação vê todos.
     // O arquivo fica dividido em partes (subcoleção), porque o armazenamento de arquivos do Firebase é pago.

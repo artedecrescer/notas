@@ -3,7 +3,7 @@ import { firebaseConfig } from './firebase-config.js';
 import {
   DISCIPLINAS, NOME_DISC, BIMESTRES, PERFIS, PROVA_MAX, ATV_MAX, podeEditar, turmasDoPerfil,
   disciplinasDoPerfil, veBoletins, isAdmin, parseNum, parseInt0, clamp, fmt, notaFinal, esc,
-  emailParaLogin, ehUsuarioInterno, loginParaEmail, STATUS_PLAN, MAX_ARQUIVO, tamanhoLegivel, fatiarArquivo, b64ParaBytes, dataBR,
+  turmaNoAno, ordenarTurmas, emailParaLogin, ehUsuarioInterno, loginParaEmail, STATUS_PLAN, MAX_ARQUIVO, tamanhoLegivel, fatiarArquivo, b64ParaBytes, dataBR,
 } from './comum.js';
 import { gerarBoletinsPDF, linhasBoletim, indexarPlanilhas } from './boletim.js';
 
@@ -57,8 +57,14 @@ window.addEventListener('beforeunload', e => { if (fila.pend > 0) { e.preventDef
 // ---------------- dados base ----------------
 async function carregarBase() {
   S.escola = (await api.getEscola()) || {};
+  if (isAdmin(S.perfil) && !S.migrado) {   // uma vez por sessão: copia notas do formato antigo (não apaga nada)
+    S.migrado = true;
+    try { const r = await api.migrarParaAnos(); if (r.copiadas) toast(`Notas organizadas por ano letivo (${r.conferidas} planilhas conferidas).`);
+      if (r.diferentes && r.diferentes.length) console.error('Migração: planilhas a conferir', r.diferentes); }
+    catch (e) { console.error('Migração', e); S.migrado = false; }
+  }
   S.turmas = await api.listarTurmas();
-  S.alunosCache = {};
+  S.alunosCache = {}; TODOS = null; ANOS = null;
   const ts = turmasDoPerfil(S.perfil, S.turmas), ds = disciplinasDoPerfil(S.perfil);
   if (!ts.find(t => t.id === S.lanc.turmaId)) S.lanc.turmaId = ts[0] ? ts[0].id : null;
   if (!ds.find(d => d.id === S.lanc.disc)) S.lanc.disc = ds[0] ? ds[0].id : null;
@@ -73,6 +79,24 @@ async function alunosDe(turmaId, forcar) {
   S.alunosCache[turmaId] = l;
   return l;
 }
+
+// ---------------- anos letivos (arquivo permanente) ----------------
+let ANOS = null, TODOS = null;
+const ordemAluno = (x, y) => (x.ordem ?? 999) - (y.ordem ?? 999) || (x.nome || '').localeCompare(y.nome || '', 'pt-BR');
+async function anosArquivados() { if (!ANOS) ANOS = await api.listarAnos(); return ANOS; }
+async function todosAlunos() { if (!TODOS) TODOS = await api.listarTodosAlunos(); return TODOS; }
+const saiu = a => !a.turmaId;
+// Escola e turmas como eram num ano letivo (o ano em andamento usa os dados atuais).
+async function contextoAno(ano) {
+  const atual = String(S.escola.ano);
+  if (!ano || String(ano) === atual) return { ano: atual, escola: S.escola, turmas: S.turmas, arquivado: false, profAluno: null };
+  const a = (await anosArquivados()).find(x => x.ano === String(ano)) || {};
+  const turmas = ordenarTurmas(Object.entries(a.turmas || {}).map(([id, t]) => ({ ...(S.turmas.find(x => x.id === id) || {}), ...t, id })));
+  return { ano: String(ano), escola: { ...S.escola, ...(a.escola || {}), ano: String(ano) }, turmas, arquivado: true, profAluno: a.professoraAluno || {} };
+}
+const alunosNoAno = (lista, turmaId, ano) => lista.filter(a => turmaNoAno(a, ano, S.escola.ano) === turmaId).sort(ordemAluno);
+// Professora que sai no boletim: no ano em andamento, a do cadastro; em ano encerrado, a que foi arquivada.
+const comProfDoAno = (a, ctx) => (ctx.arquivado ? { ...a, professora: ctx.profAluno[a.id] || '' } : a);
 
 // ---------------- inicialização ----------------
 carregarLogo();
@@ -323,55 +347,101 @@ async function viewLancar() {
 }
 
 // ================= BOLETINS =================
-function htmlBoletim(aluno, turma, mapa) {
+function htmlBoletim(aluno, turma, mapa, escola = S.escola) {
   const l = linhasBoletim(aluno.id, mapa);
   const n = v => (v === null ? '' : fmt(v)), f = v => (v === null ? '' : v);
   const obs = []; l.forEach(x => x.obs.forEach(o => obs.push(`<b>${esc(x.nome)}</b> (${o.bim}º bim): ${esc(o.texto)}`)));
-  return `<div class="bol-cab"><img src="img/logo.png" alt=""><b>BOLETIM ESCOLAR ${esc(S.escola.ano || '')}</b></div>
+  return `<div class="bol-cab"><img src="img/logo.png" alt=""><b>BOLETIM ESCOLAR ${esc(escola.ano || '')}</b></div>
     <div class="bol-linha"><span>Aluno(a): <b>${esc((aluno.nome || '').toUpperCase())}</b></span><span>Série: ${esc((turma.nome || '').toUpperCase())}</span></div>
     <table class="bol"><thead>
       <tr><th rowspan="2">Componentes Curriculares</th><th colspan="4">NOTAS</th><th colspan="4">FALTAS</th><th rowspan="2">5º CONCEITO</th><th rowspan="2">Total de Faltas</th><th rowspan="2">Resultado Final</th></tr>
       <tr>${[1, 2, 3, 4].map(b => `<th>${b}º BIM</th>`).join('')}${[1, 2, 3, 4].map(b => `<th>${b}º BIM</th>`).join('')}</tr></thead>
       <tbody>${l.map(x => `<tr><td class="esq">${esc(x.nome)}</td>${x.notas.map(v => `<td>${n(v)}</td>`).join('')}${x.faltas.map(v => `<td>${f(v)}</td>`).join('')}<td></td><td>${f(x.total)}</td><td></td></tr>`).join('')}</tbody></table>
-    <div class="bol-linha"><span>Professora: ${esc((aluno.professora || turma.professora || '').toUpperCase())}</span><span>Coordenadora Pedagógica: ${esc((S.escola.coordenadora || '').toUpperCase())}</span></div>
+    <div class="bol-linha"><span>Professora: ${esc((aluno.professora || turma.professora || '').toUpperCase())}</span><span>Coordenadora Pedagógica: ${esc((escola.coordenadora || '').toUpperCase())}</span></div>
     ${obs.length ? `<div class="suave" style="margin-top:8px">Observações: ${obs.join(' • ')}</div>` : ''}`;
 }
 async function viewBoletins() {
-  const c = $('#conteudo');
-  const ts = turmasDoPerfil(S.perfil, S.turmas);
+  const c = $('#conteudo'); const admin = isAdmin(S.perfil); const vivo = marcaVista();
+  let anos = [String(S.escola.ano)];
+  if (admin) { try { anos = anos.concat((await anosArquivados()).map(a => a.ano)); } catch (e) { /* sem arquivo ainda */ } }
+  if (!vivo()) return;
+  if (!anos.includes(S.bol.ano)) S.bol.ano = anos[0];
+  const ctx = await contextoAno(S.bol.ano);
+  const ts = admin ? ctx.turmas : turmasDoPerfil(S.perfil, S.turmas);
   if (!ts.length) { c.innerHTML = '<div class="card vazio">Nenhuma turma disponível.</div>'; return; }
   if (!ts.find(t => t.id === S.bol.turmaId)) S.bol.turmaId = ts[0].id;
   const turma = ts.find(t => t.id === S.bol.turmaId);
   c.innerHTML = `<div class="card"><div class="filtros">
+      ${admin ? `<label>Ano letivo<select id="b-ano">${anos.map(a => `<option value="${a}" ${a === ctx.ano ? 'selected' : ''}>${a}${a === String(S.escola.ano) ? ' (atual)' : ' (encerrado)'}</option>`).join('')}</select></label>` : ''}
       <label>Turma<select id="b-turma">${ts.map(t => `<option value="${t.id}" ${t.id === turma.id ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></label>
       <label class="chk"><input type="checkbox" id="b-obs" ${S.bol.obs ? 'checked' : ''}> incluir observações no PDF</label>
       <button class="primario" id="b-pdf-turma" style="margin-left:auto">⤓ Boletins da turma (PDF)</button>
+      ${admin ? '<button id="b-hist">🔎 Histórico de um aluno</button>' : ''}
     </div>
+    ${ctx.arquivado ? `<div class="aviso">📁 Ano letivo de ${ctx.ano} encerrado: as notas estão guardadas e só podem ser consultadas e impressas.</div>` : ''}
     <div class="duas-colunas"><div class="lista-alunos" id="b-lista"><div class="vazio">Carregando…</div></div><div class="previa" id="b-prev"><div class="vazio">Escolha um aluno para ver o boletim.</div></div></div>
     <p class="suave">O PDF sai no modelo da escola, dois boletins por folha, sem fundo colorido (economiza tinta).</p></div>`;
+  if (admin) { $('#b-ano').onchange = () => { S.bol.ano = $('#b-ano').value; S.bol.alunoId = null; viewBoletins(); }; $('#b-hist').onclick = () => abrirHistorico(); }
   $('#b-turma').onchange = () => { S.bol.turmaId = $('#b-turma').value; S.bol.alunoId = null; viewBoletins(); };
   $('#b-obs').onchange = () => { S.bol.obs = $('#b-obs').checked; };
-  const vivo = marcaVista();
-  const [alunos, planilhas] = await Promise.all([alunosDe(turma.id), api.getPlanilhasTurma(turma.id)]);
+  let alunos, planilhas;
+  try {
+    [alunos, planilhas] = await Promise.all([admin ? todosAlunos().then(l => alunosNoAno(l, turma.id, ctx.ano)) : alunosDe(turma.id), api.getPlanilhasTurma(turma.id, ctx.ano)]);
+  } catch (e) { if (vivo()) $('#b-lista').innerHTML = `<div class="erro">${esc(api.msgErro(e))}</div>`; return; }
   if (!vivo()) return;
+  alunos = alunos.map(a => comProfDoAno(a, ctx));
   const mapa = indexarPlanilhas(planilhas);
   if (!alunos.length) { $('#b-lista').innerHTML = '<div class="vazio">Sem alunos nesta turma.</div>'; return; }
   const mostrar = id => {
     S.bol.alunoId = id; const a = alunos.find(x => x.id === id);
     $$('#b-lista button').forEach(b => b.classList.toggle('sel', b.dataset.id === id));
-    $('#b-prev').innerHTML = htmlBoletim(a, turma, mapa) + `<div class="acoes"><button id="b-pdf-um">⤓ PDF deste aluno</button></div>`;
+    $('#b-prev').innerHTML = htmlBoletim(a, turma, mapa, ctx.escola) + `<div class="acoes"><button id="b-pdf-um">⤓ PDF deste aluno</button>${admin ? '<button id="b-hist-um">🔎 Todos os anos deste aluno</button>' : ''}</div>`;
     $('#b-pdf-um').onclick = () => pdf([a], `Boletim_${slug(a.nome)}`);
+    if (admin) $('#b-hist-um').onclick = () => abrirHistorico(a.id);
   };
   const pdf = (lista, nome) => {
     try {
-      const doc = gerarBoletinsPDF({ escola: S.escola, turma, alunos: lista, planilhas, logo: LOGO, incluirObs: $('#b-obs').checked });
-      doc.save(`${nome}_${slug(S.escola.ano)}.pdf`); toast('PDF gerado.');
+      const doc = gerarBoletinsPDF({ escola: ctx.escola, turma, alunos: lista, planilhas, logo: LOGO, incluirObs: $('#b-obs').checked });
+      doc.save(`${nome}_${slug(ctx.ano)}.pdf`); toast('PDF gerado.');
     } catch (e) { toast('Erro ao gerar PDF: ' + e.message, 'erro'); }
   };
-  $('#b-lista').innerHTML = alunos.map(a => `<button data-id="${a.id}">${esc(a.nome)}</button>`).join('');
+  $('#b-lista').innerHTML = alunos.map(a => `<button data-id="${a.id}">${esc(a.nome)}${admin && saiu(a) && !ctx.arquivado ? ' <span class="suave">(saiu)</span>' : ''}</button>`).join('');
   $$('#b-lista button').forEach(b => b.onclick = () => mostrar(b.dataset.id));
   $('#b-pdf-turma').onclick = () => pdf(alunos, `Boletins_${slug(turma.nome)}`);
   mostrar(alunos.find(a => a.id === S.bol.alunoId) ? S.bol.alunoId : alunos[0].id);
+}
+
+// Histórico escolar: todos os anos de um aluno (inclusive quem já saiu da escola), com PDF único.
+async function abrirHistorico(alunoId) {
+  const m = abrirModal(`<h2>Histórico de um aluno</h2><p class="suave">Todos os anos letivos guardados no sistema, inclusive de quem já saiu da escola.</p>
+    <input id="h-busca" placeholder="Digite parte do nome do aluno" autocomplete="off"><div id="h-res" class="lista-alunos" style="max-height:220px;margin-top:8px"></div><div id="h-anos"></div>`, true);
+  let lista; try { lista = (await todosAlunos()).slice().sort((x, y) => (x.nome || '').localeCompare(y.nome || '', 'pt-BR')); } catch (e) { $('#h-res', m).innerHTML = `<div class="erro">${esc(api.msgErro(e))}</div>`; return; }
+  const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const anos = [String(S.escola.ano), ...(await anosArquivados()).map(a => a.ano)].sort();
+  const desenhar = () => {
+    const q = norm($('#h-busca', m).value); const r = lista.filter(a => !q || norm(a.nome).includes(q)).slice(0, 40);
+    $('#h-res', m).innerHTML = r.map(a => `<button data-id="${a.id}">${esc(a.nome)}${saiu(a) ? ` <span class="suave">(saiu${a.saida && a.saida.ano ? ' em ' + esc(a.saida.ano) : ''})</span>` : ''}</button>`).join('') || '<div class="vazio">Nenhum aluno encontrado.</div>';
+    $$('#h-res button', m).forEach(b => b.onclick = () => escolher(b.dataset.id));
+  };
+  const escolher = async id => {
+    const a = lista.find(x => x.id === id); $$('#h-res button', m).forEach(b => b.classList.toggle('sel', b.dataset.id === id));
+    const el = $('#h-anos', m); el.innerHTML = '<div class="carregando-bloco">Carregando…</div>';
+    const itens = [];
+    for (const ano of anos) {
+      const tid = turmaNoAno(a, ano, S.escola.ano); if (!tid) continue;
+      const ctx = await contextoAno(ano); const turma = ctx.turmas.find(t => t.id === tid) || { id: tid, nome: tid };
+      itens.push({ aluno: comProfDoAno(a, ctx), escola: ctx.escola, turma, planilhas: await api.getPlanilhasTurma(tid, ano) });
+    }
+    if (!itens.length) { el.innerHTML = '<div class="vazio">Nenhum ano letivo encontrado para este aluno.</div>'; return; }
+    el.innerHTML = `<div class="acoes"><button class="primario" id="h-pdf">⤓ PDF com todos os anos (${itens.length})</button></div>` +
+      itens.map(it => `<div class="previa" style="margin-top:10px">${htmlBoletim(it.aluno, it.turma, indexarPlanilhas(it.planilhas), it.escola)}</div>`).join('');
+    $('#h-pdf', m).onclick = () => {
+      try { gerarBoletinsPDF({ itens, logo: LOGO, incluirObs: true }).save(`Historico_${slug(a.nome)}.pdf`); toast('PDF gerado.'); }
+      catch (e) { toast('Erro ao gerar PDF: ' + e.message, 'erro'); }
+    };
+  };
+  $('#h-busca', m).oninput = desenhar; desenhar(); $('#h-busca', m).focus();
+  if (alunoId) escolher(alunoId);
 }
 
 // ================= PENDÊNCIAS =================
@@ -457,14 +527,29 @@ async function cadAlunos() {
     <tbody>${alunos.map((a, i) => `<tr data-id="${a.id}"><td class="n">${i + 1}</td><td><input class="a-nome" value="${esc(a.nome)}"></td>
       <td><input class="a-prof" value="${esc(a.professora || '')}" placeholder="${esc(turma.professora || '')}"></td>
       <td><select class="a-turma">${S.turmas.map(t => `<option value="${t.id}" ${t.id === a.turmaId ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></td>
-      <td><button class="mini perigo" data-excluir>Excluir</button></td></tr>`).join('')}</tbody></table></div>
-    <div class="acoes"><button class="primario" id="ca-salvar">Salvar alterações</button><button id="ca-az">Ordenar A–Z</button><span class="suave" id="ca-info"></span></div>` : '<div class="vazio">Nenhum aluno ainda.</div>'}`;
+      <td><button class="mini" data-excluir>Tirar da turma</button></td></tr>`).join('')}</tbody></table></div>
+    <div class="acoes"><button class="primario" id="ca-salvar">Salvar alterações</button><button id="ca-az">Ordenar A–Z</button><span class="suave" id="ca-info"></span></div>` : '<div class="vazio">Nenhum aluno ainda.</div>'}
+    <h3>Alunos que saíram da escola</h3><div id="ca-saidas" class="suave">Carregando…</div>`;
+  // Quem saiu continua no sistema (notas e boletins guardados); pode voltar para uma turma.
+  todosAlunos().then(l => {
+    const fora = l.filter(saiu).sort((x, y) => (x.nome || '').localeCompare(y.nome || '', 'pt-BR'));
+    const el = $('#ca-saidas'); if (!el) return;
+    el.className = '';
+    el.innerHTML = fora.length ? `<div class="tabela-wrap"><table class="cad"><tbody>${fora.map(a => `<tr data-id="${a.id}"><td class="esq"><b>${esc(a.nome)}</b></td>
+      <td class="esq suave">${a.saida && a.saida.ano ? 'saiu em ' + esc(a.saida.ano) : ''}${a.saida && a.saida.motivo ? ' · ' + esc(a.saida.motivo) : ''}</td>
+      <td><button class="mini" data-hist>🔎 Boletins</button> <button class="mini" data-volta>Voltar para ${esc(turma.nome)}</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="suave">Nenhum. Quando um aluno sai (transferência, desistência), ele vem para cá com todas as notas guardadas.</p>';
+    $$('#ca-saidas [data-hist]').forEach(b => b.onclick = () => abrirHistorico(b.closest('tr').dataset.id));
+    $$('#ca-saidas [data-volta]').forEach(b => b.onclick = async () => {
+      try { await api.reativarAluno(b.closest('tr').dataset.id, turma.id); TODOS = null; S.alunosCache = {}; toast('Aluno de volta à turma.'); cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+    });
+  }).catch(e => { const el = $('#ca-saidas'); if (el) el.innerHTML = `<div class="erro">${esc(api.msgErro(e))}</div>`; });
   $('#ca-turma').onchange = () => { S.cadTurma = $('#ca-turma').value; cadAlunos(); };
   $('#ca-add').onclick = async () => {
     const nomes = $('#ca-novos').value.split('\n').map(s => s.trim()).filter(Boolean);
     if (!nomes.length) return toast('Cole pelo menos um nome.', 'erro');
     const base = alunos.reduce((m, a) => Math.max(m, a.ordem ?? 0), 0);
-    try { await api.salvarAlunosEmLote(nomes.map((nome, i) => ({ nome, turmaId: turma.id, ordem: base + i + 1 }))); toast(`${nomes.length} aluno(s) adicionado(s).`); await cadAlunos(); }
+    try { await api.salvarAlunosEmLote(nomes.map((nome, i) => ({ nome, turmaId: turma.id, ordem: base + i + 1 }))); TODOS = null; toast(`${nomes.length} aluno(s) adicionado(s).`); await cadAlunos(); }
     catch (e) { toast(api.msgErro(e), 'erro'); }
   };
   if (!alunos.length) return;
@@ -473,16 +558,35 @@ async function cadAlunos() {
   $('#ca-salvar').onclick = async () => {
     const mud = $$('#sub tbody tr.mudou').map(tr => ({ id: tr.dataset.id, nome: $('.a-nome', tr).value.trim(), professora: $('.a-prof', tr).value.trim(), turmaId: $('.a-turma', tr).value }));
     if (!mud.length) return toast('Nada para salvar.');
-    try { await api.salvarAlunosEmLote(mud); S.alunosCache = {}; toast(`${mud.length} aluno(s) atualizado(s).`); await cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+    try { await api.salvarAlunosEmLote(mud); S.alunosCache = {}; TODOS = null; toast(`${mud.length} aluno(s) atualizado(s).`); await cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
   };
   $('#ca-az').onclick = async () => {
     const ord = [...alunos].sort((x, y) => (x.nome || '').localeCompare(y.nome || '', 'pt-BR', { sensitivity: 'base' }));
     try { await api.salvarAlunosEmLote(ord.map((a, i) => ({ id: a.id, ordem: i + 1 }))); toast('Ordem alfabética aplicada.'); await cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
   };
   $$('#sub [data-excluir]').forEach(b => b.onclick = async () => {
-    const tr = b.closest('tr'); const nome = $('.a-nome', tr).value;
-    if (!confirm(`Excluir ${nome} da lista? (As notas já lançadas ficam guardadas no backup, mas o aluno sai das telas e dos boletins.)`)) return;
-    try { await api.excluirAluno(tr.dataset.id); toast('Aluno excluído.'); await cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+    const tr = b.closest('tr'), id = tr.dataset.id, a = alunos.find(x => x.id === id), nome = a.nome;
+    // Só dá para apagar o cadastro de quem nunca teve nota nem matrícula em outro ano (cadastro feito por engano).
+    let temHistorico = Object.keys(a.matriculas || {}).some(y => y !== String(S.escola.ano));
+    if (!temHistorico) {
+      try { temHistorico = (await api.getPlanilhasTurma(turma.id)).some(p => { const e = p.alunos && p.alunos[id]; return e && Object.values(e).some(v => v !== null && v !== ''); }); }
+      catch (e) { temHistorico = true; }
+    }
+    const m = abrirModal(`<h2>Tirar ${esc(nome)} da turma</h2>
+      <p><b>Registrar saída</b> (transferência, desistência): o aluno sai das listas, mas <b>as notas e os boletins ficam guardados para sempre</b>
+      e podem ser impressos depois em <b>Boletins → Histórico de um aluno</b>.</p>
+      <label class="campo">Motivo (opcional)<input id="sa-motivo" placeholder="Ex.: transferência para outra escola"></label>
+      <div class="acoes"><button class="primario" id="sa-ok">Registrar saída</button><button id="sa-x">Cancelar</button></div>
+      ${temHistorico ? '<p class="suave">Este aluno já tem notas no sistema, por isso o cadastro não pode ser apagado.</p>'
+        : '<hr><p class="suave">Cadastrou por engano? Como este aluno ainda não tem nenhuma nota, dá para apagar o cadastro.</p><div class="acoes"><button class="perigo" id="sa-apagar">Apagar cadastro feito por engano</button></div>'}`);
+    $('#sa-x', m).onclick = fecharModal;
+    $('#sa-ok', m).onclick = async () => {
+      try { await api.registrarSaida(id, $('#sa-motivo', m).value.trim()); fecharModal(); S.alunosCache = {}; TODOS = null; toast('Saída registrada. As notas continuam guardadas.'); await cadAlunos(); }
+      catch (e) { toast(api.msgErro(e), 'erro'); }
+    };
+    const ap = $('#sa-apagar', m); if (ap) ap.onclick = async () => {
+      try { await api.excluirAluno(id); fecharModal(); S.alunosCache = {}; TODOS = null; toast('Cadastro apagado.'); await cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+    };
   });
 }
 
@@ -595,58 +699,138 @@ async function viewEscola() {
   const c = $('#conteudo'); const e = S.escola, tr = e.travas || {};
   c.innerHTML = `<div class="card"><h2>Dados da escola</h2><div class="grade">
       <label class="campo">Nome da escola<input id="e-nome" value="${esc(e.nome || '')}"></label>
-      <label class="campo">Ano letivo<input id="e-ano" value="${esc(e.ano || '')}"></label>
+      <label class="campo">Ano letivo<input id="e-ano" value="${esc(e.ano || '')}" disabled title="Muda só pela virada de ano, mais abaixo"></label>
       <label class="campo">Coordenadora pedagógica (boletim)<input id="e-coord" value="${esc(e.coordenadora || '')}"></label>
       <label class="campo">Média de aprovação<input id="e-corte" inputmode="decimal" value="${fmtIn(e.corte ?? 6)}"></label>
       <label class="campo">Bimestre atual<select id="e-bim">${BIMESTRES.map(b => `<option value="${b}" ${Number(e.bimestreAtual) === b ? 'selected' : ''}>${b}º bimestre</option>`).join('')}</select></label></div>
     <h3>Fechamento de bimestres</h3><p class="suave">Bimestre fechado: professores só consultam; a coordenação continua podendo corrigir.</p>
     <div class="checks">${BIMESTRES.map(b => `<label><input type="checkbox" class="e-trava" value="${b}" ${tr[String(b)] ? 'checked' : ''}> ${b}º bimestre fechado</label>`).join('')}</div>
     <div class="acoes"><button class="primario" id="e-salvar">Salvar</button></div></div>
+  <div class="card"><h2>Anos letivos</h2>
+    <p>Ano letivo em andamento: <b>${esc(e.ano || '')}</b>. Os anos encerrados ficam guardados para sempre, somente para consulta,
+    em <b>Boletins</b> (escolha o ano) e em <b>Boletins → Histórico de um aluno</b>.</p>
+    <div id="e-anos" class="suave">Carregando…</div>
+    <div class="acoes"><button class="primario" id="e-virada">Encerrar ${esc(e.ano || '')} e iniciar ${Number(e.ano) + 1}…</button></div>
+    <p class="suave">Use só no começo do novo ano letivo, depois de lançar e conferir todas as notas do 4º bimestre. Nenhuma nota é apagada.</p></div>
   <div class="card"><h2>Exportar e backup</h2>
     <div class="acoes"><button id="x-excel">⤓ Planilha geral (Excel)</button><button id="x-backup">⤓ Backup completo (.json)</button>
       <button id="x-import">⤒ Importar dados (.json)</button><input type="file" id="x-file" accept="application/json,.json" hidden></div>
-    <p class="suave">Faça um backup ao fim de cada bimestre e guarde no seu Google Drive. A importação serve para restaurar um backup ou carregar os dados iniciais.</p>
+    <p class="suave">Faça um backup ao fim de cada bimestre e guarde no Google Drive da escola${e.ultimoBackup ? ` (último: ${dataBR(e.ultimoBackup)})` : ''}. O backup e a planilha geral trazem <b>todos os anos</b>.
+    A importação serve para restaurar um backup: ela nunca altera notas de anos encerrados, só repõe o que estiver faltando.</p>
     ${api.modo === 'demo' ? '<div class="acoes"><button class="perigo" id="x-demo">Recomeçar demonstração</button></div>' : ''}</div>`;
   $('#e-salvar').onclick = async () => {
     const travas = {}; BIMESTRES.forEach(b => { travas[String(b)] = !!$(`.e-trava[value="${b}"]`).checked; });
-    const d = { nome: $('#e-nome').value.trim(), ano: $('#e-ano').value.trim(), coordenadora: $('#e-coord').value.trim(),
+    const d = { nome: $('#e-nome').value.trim(), coordenadora: $('#e-coord').value.trim(),
       corte: parseNum($('#e-corte').value) ?? 6, bimestreAtual: Number($('#e-bim').value), travas };
     if (!d.nome) return toast('Preencha o nome da escola (ele sai no boletim).', 'erro');
     if (d.corte < 0 || d.corte > 10) return toast('A média para aprovação precisa ficar entre 0 e 10.', 'erro');
     try { await api.salvarEscola(d); S.escola = { ...S.escola, ...d }; toast('Dados salvos.'); render(); } catch (err) { toast(api.msgErro(err), 'erro'); }
   };
-  $('#x-backup').onclick = async () => {
-    try { const d = await api.exportarTudo(); baixar(`backup_notas_${new Date().toISOString().slice(0, 10)}.json`, new Blob([JSON.stringify(d, null, 1)], { type: 'application/json' })); toast('Backup baixado.'); }
-    catch (err) { toast(api.msgErro(err), 'erro'); }
-  };
+  $('#x-backup').onclick = async () => { if (await baixarBackup()) toast('Backup baixado. Guarde no Google Drive da escola.'); };
+  $('#e-virada').onclick = () => abrirVirada();
+  anosArquivados().then(l => { const el = $('#e-anos'); if (el) el.innerHTML = l.length ? 'Anos encerrados: ' + l.map(a => `<b>${esc(a.ano)}</b>`).join(', ') : 'Nenhum ano encerrado ainda.'; })
+    .catch(() => { const el = $('#e-anos'); if (el) el.textContent = ''; });
   $('#x-import').onclick = () => $('#x-file').click();
   $('#x-file').onchange = async ev => {
     const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
     let d; try { d = JSON.parse(await f.text()); } catch (err) { return toast('Arquivo inválido.', 'erro'); }
     if (d.formato !== 'sistema-notas-adc') return toast('Este arquivo não é um backup do sistema.', 'erro');
-    if (!confirm(`Importar ${(d.turmas || []).length} turma(s), ${(d.alunos || []).length} aluno(s) e ${(d.planilhas || []).length} planilha(s) de notas?\nRegistros com o mesmo código serão substituídos.`)) return;
-    try { const r = await api.importarTudo(d); await carregarBase(); toast(`Importado: ${r.turmas} turmas, ${r.alunos} alunos, ${r.planilhas} planilhas.`); render(); }
+    if (!confirm(`Importar ${(d.turmas || []).length} turma(s), ${(d.alunos || []).length} aluno(s) e ${(d.planilhas || []).length} planilha(s) de notas?\nNotas do ano em andamento com o mesmo código serão atualizadas. Anos encerrados não são alterados: só entra o que estiver faltando.`)) return;
+    try { const r = await api.importarTudo(d); await carregarBase(); toast(`Importado: ${r.turmas} turmas, ${r.alunos} alunos, ${r.planilhas} planilhas${r.puladas ? ` (${r.puladas} de anos encerrados já existiam e foram mantidas)` : ''}.`); render(); }
     catch (err) { toast(api.msgErro(err), 'erro'); }
   };
   $('#x-excel').onclick = async () => {
     const b = $('#x-excel'); b.disabled = true; b.textContent = 'Gerando…';
     try {
       await carregarXLSX();
-      const linhas = [['Turma', 'Aluno', 'Disciplina', '1º BIM', 'Faltas 1º', '2º BIM', 'Faltas 2º', '3º BIM', 'Faltas 3º', '4º BIM', 'Faltas 4º', 'Total de faltas', 'Observações']];
-      for (const t of S.turmas) {
-        const [al, pls] = await Promise.all([alunosDe(t.id), api.getPlanilhasTurma(t.id)]); const mapa = indexarPlanilhas(pls);
-        al.forEach(a => linhasBoletim(a.id, mapa).forEach(l => {
-          const r = [t.nome, a.nome, l.nome]; l.notas.forEach((n, i) => r.push(n ?? '', l.faltas[i] ?? ''));
-          r.push(l.total ?? '', l.obs.map(o => `${o.bim}º: ${o.texto}`).join(' | ')); linhas.push(r);
-        }));
+      const linhas = [['Ano', 'Turma', 'Aluno', 'Situação', 'Disciplina', '1º BIM', 'Faltas 1º', '2º BIM', 'Faltas 2º', '3º BIM', 'Faltas 3º', '4º BIM', 'Faltas 4º', 'Total de faltas', 'Observações']];
+      const todos = await todosAlunos();
+      const anos = [...(await anosArquivados()).map(a => a.ano).sort(), String(S.escola.ano)];
+      for (const ano of anos) {
+        const ctx = await contextoAno(ano); const pls = await api.getPlanilhasAno(ano);
+        for (const t of ctx.turmas) {
+          const mapa = indexarPlanilhas(pls.filter(p => p.turmaId === t.id));
+          alunosNoAno(todos, t.id, ano).forEach(a => linhasBoletim(a.id, mapa).forEach(l => {
+            const r = [ano, t.nome, a.nome, ctx.arquivado ? '' : (saiu(a) ? 'saiu' : ''), l.nome]; l.notas.forEach((n, i) => r.push(n ?? '', l.faltas[i] ?? ''));
+            r.push(l.total ?? '', l.obs.map(o => `${o.bim}º: ${o.texto}`).join(' | ')); linhas.push(r);
+          }));
+        }
       }
-      const ws = XLSX.utils.aoa_to_sheet(linhas); ws['!cols'] = [{ wch: 10 }, { wch: 34 }, { wch: 12 }, ...Array(9).fill({ wch: 9 }), { wch: 40 }];
+      const ws = XLSX.utils.aoa_to_sheet(linhas); ws['!cols'] = [{ wch: 6 }, { wch: 10 }, { wch: 34 }, { wch: 8 }, { wch: 12 }, ...Array(9).fill({ wch: 9 }), { wch: 40 }];
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Notas');
-      XLSX.writeFile(wb, `Notas_${slug(S.escola.nome)}_${slug(S.escola.ano)}.xlsx`); toast('Planilha gerada.');
+      XLSX.writeFile(wb, `Notas_${slug(S.escola.nome)}_todos_os_anos.xlsx`); toast('Planilha gerada.');
     } catch (err) { toast(api.msgErro(err), 'erro'); }
     b.disabled = false; b.textContent = '⤓ Planilha geral (Excel)';
   };
   const dr = $('#x-demo'); if (dr) dr.onclick = () => { if (confirm('Apagar as alterações e recomeçar a demonstração?')) { api.resetarDemo(); } };
+}
+
+// Baixa a cópia de segurança completa (todos os anos) e registra a data.
+async function baixarBackup() {
+  try {
+    const d = await api.exportarTudo();
+    baixar(`backup_notas_${slug(S.escola.nome)}_${new Date().toISOString().slice(0, 10)}.json`, new Blob([JSON.stringify(d, null, 1)], { type: 'application/json' }));
+    try { await api.registrarBackup(); S.escola.ultimoBackup = new Date().toISOString(); } catch (e) { /* não impede o download */ }
+    return true;
+  } catch (err) { toast(api.msgErro(err), 'erro'); return false; }
+}
+
+// ================= VIRADA DO ANO LETIVO =================
+// Arquiva o ano que termina (somente leitura para sempre), registra a nova turma de cada aluno
+// e abre o novo ano. Exige cópia de segurança antes. Nenhuma nota é apagada ou alterada.
+async function abrirVirada() {
+  const atual = String(S.escola.ano), novo = String(Number(atual) + 1);
+  const m = abrirModal(`<h2>Encerrar ${atual} e iniciar ${novo}</h2><div id="v-corpo" class="carregando-bloco">Carregando…</div>`, true);
+  let alunos, falta = 0;
+  try {
+    alunos = (await todosAlunos()).filter(a => a.turmaId).sort((x, y) => {
+      const ox = (S.turmas.find(t => t.id === x.turmaId) || {}).ordem ?? 99, oy = (S.turmas.find(t => t.id === y.turmaId) || {}).ordem ?? 99;
+      return ox - oy || ordemAluno(x, y); });
+    const p4 = await api.getPlanilhasBimestre(4);
+    alunos.forEach(a => DISCIPLINAS.forEach(d => { const pl = p4.find(p => p.turmaId === a.turmaId && p.disc === d.id); if (notaFinal(pl && pl.alunos && pl.alunos[a.id]) === null) falta++; }));
+  } catch (e) { $('#v-corpo', m).innerHTML = `<div class="erro">${esc(api.msgErro(e))}</div>`; return; }
+  const ts = S.turmas;
+  const proxima = tid => { const i = ts.findIndex(t => t.id === tid); return i >= 0 && i < ts.length - 1 ? ts[i + 1].id : ''; };
+  const opts = sel => ts.map(t => `<option value="${t.id}" ${t.id === sel ? 'selected' : ''}>${esc(t.nome)}</option>`).join('') + `<option value="" ${!sel ? 'selected' : ''}>Concluiu / saiu da escola</option>`;
+  let backupOk = false;
+  $('#v-corpo', m).className = '';
+  $('#v-corpo', m).innerHTML = `
+    <div class="passos">
+      <div class="passo"><span class="num">1</span><div>
+        <b>Confira o ${atual}.</b> ${falta ? `<span class="aviso" style="display:inline-block">Ainda faltam <b>${falta}</b> notas do 4º bimestre.</span> Depois da virada, ${atual} fica <b>somente leitura</b> e ninguém mais lança notas nele.` : '<span class="ok-box" style="display:inline-block">Todas as notas do 4º bimestre estão lançadas.</span>'}</div></div>
+      <div class="passo"><span class="num">2</span><div><b>Baixe a cópia de segurança</b> e guarde no Google Drive da escola (obrigatório).
+        <div class="acoes"><button id="v-backup">⤓ Baixar cópia de segurança</button><span id="v-backup-ok" class="suave"></span></div></div></div>
+      <div class="passo"><span class="num">3</span><div><b>Para qual turma cada aluno vai em ${novo}?</b> Já deixei a série seguinte marcada; confira repetências e saídas.
+        <div class="tabela-wrap" style="max-height:320px;overflow:auto"><table class="cad"><thead><tr><th class="esq">Aluno</th><th class="esq">Em ${atual}</th><th class="esq">Em ${novo}</th></tr></thead><tbody>
+        ${alunos.map(a => `<tr data-id="${a.id}"><td class="esq">${esc(a.nome)}</td><td class="esq">${esc((ts.find(t => t.id === a.turmaId) || {}).nome || '')}</td><td><select class="v-dest">${opts(proxima(a.turmaId))}</select></td></tr>`).join('')}
+        </tbody></table></div></div></div>
+      <div class="passo"><span class="num">4</span><div><b>Confirme.</b> Digite <b>${novo}</b> para liberar o botão.
+        <label class="campo"><input id="v-conf" inputmode="numeric" placeholder="${novo}" autocomplete="off"></label>
+        <div class="acoes"><button class="primario" id="v-ok" disabled>Encerrar ${atual} e iniciar ${novo}</button><button id="v-x">Cancelar</button></div></div></div>
+    </div>
+    <p class="suave">O que acontece: ${atual} é arquivado com as turmas, professoras e coordenadora daquele ano; as notas de ${atual} ficam guardadas para sempre e só podem ser consultadas e impressas;
+    cada aluno passa para a turma escolhida; quem concluiu ou saiu continua com o histórico em <b>Boletins → Histórico de um aluno</b>; ${novo} começa no 1º bimestre, sem travas.
+    Depois, atualize em <b>Cadastros → Turmas</b> as professoras de ${novo}.</p>`;
+  const liberar = () => { $('#v-ok', m).disabled = !(backupOk && $('#v-conf', m).value.trim() === novo); };
+  $('#v-conf', m).oninput = liberar;
+  $('#v-x', m).onclick = fecharModal;
+  $('#v-backup', m).onclick = async () => { if (await baixarBackup()) { backupOk = true; $('#v-backup-ok', m).textContent = '✓ cópia baixada'; liberar(); } };
+  $('#v-ok', m).onclick = async () => {
+    const b = $('#v-ok', m); b.disabled = true; b.textContent = 'Encerrando…';
+    const arquivo = {
+      escola: { nome: S.escola.nome || '', coordenadora: S.escola.coordenadora || '', corte: S.escola.corte ?? 6 },
+      turmas: Object.fromEntries(S.turmas.map(t => [t.id, { nome: t.nome || '', professora: t.professora || '', ordem: t.ordem ?? null }])),
+      professoraAluno: Object.fromEntries(alunos.filter(a => a.professora).map(a => [a.id, a.professora])),
+      travas: { '1': true, '2': true, '3': true, '4': true },
+    };
+    const mudancas = $$('tbody tr[data-id]', m).map(tr => {
+      const a = alunos.find(x => x.id === tr.dataset.id); return { id: a.id, turmaAnterior: a.turmaId, turmaId: $('.v-dest', tr).value };
+    });
+    try {
+      await api.iniciarAnoLetivo({ novoAno: novo, arquivo, mudancas });
+      fecharModal(); await carregarBase(); S.bol.ano = null; toast(`${atual} encerrado e guardado. Bem-vindos a ${novo}!`); render();
+    } catch (e) { toast('Nada foi alterado: ' + api.msgErro(e), 'erro'); b.disabled = false; b.textContent = `Encerrar ${atual} e iniciar ${novo}`; }
+  };
 }
 
 // ================= JANELA (modal) =================
@@ -681,7 +865,10 @@ function abrirAjuda() {
     '<b>Planejamentos</b>: baixe o arquivo (ele passa a "Visto") e clique em <b>Aprovar</b> ou <b>Pedir ajuste</b>.',
     '<b>Acompanhamento</b>: quadro de notas lançadas por turma e disciplina.',
     '<b>Cadastros → Professores e acessos</b>: crie acessos e marque as turmas de cada titular.',
-    '<b>Escola</b>: feche o bimestre (os professores passam a só consultar) e faça o backup.']);
+    '<b>Escola</b>: feche o bimestre (os professores passam a só consultar) e faça o backup.',
+    '<b>Aluno que sai</b> (transferência): em Cadastros → Alunos, clique em <b>Tirar da turma → Registrar saída</b>. As notas ficam guardadas para sempre.',
+    '<b>Boletim de anos anteriores</b> ou de quem já saiu: <b>Boletins → Histórico de um aluno</b>.',
+    '<b>Novo ano letivo</b>: em Escola, <b>Encerrar e iniciar</b>. O ano que termina fica guardado, somente para consulta.']);
   abrirModal(`<h2>Como usar</h2>${notas}${plan}${p.role !== 'ingles' ? bol : ''}${isAdmin(p) ? coord : ''}
     <div class="ajuda-item"><h3>🔑 Senha</h3><p>Para trocar sua senha, clique em <b>Minha senha</b>, no alto da tela.</p></div>`, true);
 }
@@ -725,7 +912,10 @@ async function viewInicio() {
   const c = $('#conteudo'), p = S.perfil, vivo = marcaVista();
   const bim = Number(S.escola.bimestreAtual) || 1, fechado = !!(S.escola.travas || {})[String(bim)];
   const primeiro = (p.nome || '').split(' ')[0];
-  c.innerHTML = `<div class="saudacao"><h1>Olá, ${esc(primeiro)}!</h1><p class="suave">Estamos no <b>${bim}º bimestre</b>${fechado ? ' (fechado para lançamentos)' : ''}.</p></div>
+  const ub = S.escola.ultimoBackup, ubData = ub && (ub.toDate ? ub.toDate() : new Date(ub));
+  const pedirBackup = isAdmin(p) && (!ubData || Date.now() - ubData.getTime() > 30 * 864e5);
+  c.innerHTML = `<div class="saudacao"><h1>Olá, ${esc(primeiro)}!</h1><p class="suave">Ano letivo ${esc(S.escola.ano || '')} · estamos no <b>${bim}º bimestre</b>${fechado ? ' (fechado para lançamentos)' : ''}.</p></div>
+    ${pedirBackup ? `<div class="aviso">💾 ${ubData ? 'Faz mais de 30 dias desde a última cópia de segurança.' : 'Ainda não foi feita nenhuma cópia de segurança.'} Baixe e guarde no Google Drive da escola. <button class="mini primario" id="i-backup">Baixar agora</button></div>` : ''}
     <div class="atalhos">
       <button class="atalho" data-ir="lancar"><span>✏️</span><b>Lançar notas</b><small>prova, atividades e faltas</small></button>
       <button class="atalho" data-ir="planejamentos"><span>📄</span><b>${isAdmin(p) ? 'Ver planejamentos' : 'Enviar planejamento'}</b><small>${isAdmin(p) ? 'o que as professoras enviaram' : 'direto para a coordenação'}</small></button>
@@ -734,6 +924,7 @@ async function viewInicio() {
     <div class="duas-colunas inicio"><div class="card" id="i-notas"><h2>Notas do ${bim}º bimestre</h2><div class="carregando-bloco">Carregando…</div></div>
     <div class="card" id="i-plan"><h2>Planejamentos</h2><div class="carregando-bloco">Carregando…</div></div></div>`;
   $$('[data-ir]', c).forEach(b => b.onclick = () => irPara(b.dataset.ir));
+  const ib = $('#i-backup'); if (ib) ib.onclick = async () => { if (await baixarBackup()) { toast('Backup baixado. Guarde no Google Drive da escola.'); ib.closest('.aviso').remove(); } };
   // notas
   try {
     if (isAdmin(p)) {
