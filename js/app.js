@@ -95,6 +95,25 @@ async function contextoAno(ano) {
   return { ano: String(ano), escola: { ...S.escola, ...(a.escola || {}), ano: String(ano) }, turmas, arquivado: true, profAluno: a.professoraAluno || {} };
 }
 const alunosNoAno = (lista, turmaId, ano) => lista.filter(a => turmaNoAno(a, ano, S.escola.ano) === turmaId).sort(ordemAluno);
+// Aluno que muda de turma no meio do ano: as notas dele vão junto. São COPIADAS da turma antiga
+// para a nova (a antiga continua guardada) e só entra o que a turma nova ainda não tem.
+const temValor = e => !!e && ['prova', 'atv', 'faltas', 'final', 'obs'].some(k => e[k] !== null && e[k] !== undefined && e[k] !== '');
+async function levarNotas(alunoId, de, para) {
+  if (!de || !para || de === para) return 0;
+  const [origem, destino] = await Promise.all([api.getPlanilhasTurma(de), api.getPlanilhasTurma(para)]);
+  let n = 0;
+  for (const p of origem) {
+    const e = p.alunos && p.alunos[alunoId]; if (!temValor(e)) continue;
+    const d = destino.find(x => x.disc === p.disc && Number(x.bim) === Number(p.bim));
+    const atual = (d && d.alunos && d.alunos[alunoId]) || {};
+    const novo = {};
+    Object.entries(e).forEach(([k, v]) => { if (v !== null && v !== undefined && v !== '' && (atual[k] === null || atual[k] === undefined || atual[k] === '')) novo[k] = v; });
+    if (Object.keys(novo).length) { await api.salvarLancamento(para, p.disc, p.bim, alunoId, novo); n++; }
+  }
+  return n;
+}
+// O aluno tem alguma nota no ano em andamento, em qualquer turma?
+async function notasNoAno(alunoId) { return (await api.getPlanilhasAno(S.escola.ano)).some(p => temValor(p.alunos && p.alunos[alunoId])); }
 // Professora que sai no boletim: no ano em andamento, a do cadastro; em ano encerrado, a que foi arquivada.
 const comProfDoAno = (a, ctx) => (ctx.arquivado ? { ...a, professora: ctx.profAluno[a.id] || '' } : a);
 
@@ -541,7 +560,9 @@ async function cadAlunos() {
       : '<p class="suave">Nenhum. Quando um aluno sai (transferência, desistência), ele vem para cá com todas as notas guardadas.</p>';
     $$('#ca-saidas [data-hist]').forEach(b => b.onclick = () => abrirHistorico(b.closest('tr').dataset.id));
     $$('#ca-saidas [data-volta]').forEach(b => b.onclick = async () => {
-      try { await api.reativarAluno(b.closest('tr').dataset.id, turma.id); TODOS = null; S.alunosCache = {}; toast('Aluno de volta à turma.'); cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+      try { const id = b.closest('tr').dataset.id, a = l.find(x => x.id === id), antes = (a.matriculas || {})[String(S.escola.ano)];
+        if (antes && antes !== turma.id) await levarNotas(id, antes, turma.id);
+        await api.reativarAluno(id, turma.id); TODOS = null; S.alunosCache = {}; toast('Aluno de volta à turma.'); cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
     });
   }).catch(e => { const el = $('#ca-saidas'); if (el) el.innerHTML = `<div class="erro">${esc(api.msgErro(e))}</div>`; });
   $('#ca-turma').onchange = () => { S.cadTurma = $('#ca-turma').value; cadAlunos(); };
@@ -558,7 +579,13 @@ async function cadAlunos() {
   $('#ca-salvar').onclick = async () => {
     const mud = $$('#sub tbody tr.mudou').map(tr => ({ id: tr.dataset.id, nome: $('.a-nome', tr).value.trim(), professora: $('.a-prof', tr).value.trim(), turmaId: $('.a-turma', tr).value }));
     if (!mud.length) return toast('Nada para salvar.');
-    try { await api.salvarAlunosEmLote(mud); S.alunosCache = {}; TODOS = null; toast(`${mud.length} aluno(s) atualizado(s).`); await cadAlunos(); } catch (e) { toast(api.msgErro(e), 'erro'); }
+    const b = $('#ca-salvar'); b.disabled = true;
+    try {
+      let levadas = 0;   // primeiro as notas vão para a turma nova; só depois o aluno muda de turma
+      for (const m of mud) if (m.turmaId !== turma.id) levadas += await levarNotas(m.id, turma.id, m.turmaId);
+      await api.salvarAlunosEmLote(mud); S.alunosCache = {}; TODOS = null;
+      toast(`${mud.length} aluno(s) atualizado(s).${levadas ? ' As notas deste ano foram junto para a turma nova.' : ''}`); await cadAlunos();
+    } catch (e) { toast('Nada mudou de turma: ' + api.msgErro(e), 'erro'); b.disabled = false; }
   };
   $('#ca-az').onclick = async () => {
     const ord = [...alunos].sort((x, y) => (x.nome || '').localeCompare(y.nome || '', 'pt-BR', { sensitivity: 'base' }));
@@ -568,10 +595,7 @@ async function cadAlunos() {
     const tr = b.closest('tr'), id = tr.dataset.id, a = alunos.find(x => x.id === id), nome = a.nome;
     // Só dá para apagar o cadastro de quem nunca teve nota nem matrícula em outro ano (cadastro feito por engano).
     let temHistorico = Object.keys(a.matriculas || {}).some(y => y !== String(S.escola.ano));
-    if (!temHistorico) {
-      try { temHistorico = (await api.getPlanilhasTurma(turma.id)).some(p => { const e = p.alunos && p.alunos[id]; return e && Object.values(e).some(v => v !== null && v !== ''); }); }
-      catch (e) { temHistorico = true; }
-    }
+    if (!temHistorico) { try { temHistorico = await notasNoAno(id); } catch (e) { temHistorico = true; } }   // todas as turmas do ano
     const m = abrirModal(`<h2>Tirar ${esc(nome)} da turma</h2>
       <p><b>Registrar saída</b> (transferência, desistência): o aluno sai das listas, mas <b>as notas e os boletins ficam guardados para sempre</b>
       e podem ser impressos depois em <b>Boletins → Histórico de um aluno</b>.</p>

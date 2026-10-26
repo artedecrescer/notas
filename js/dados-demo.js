@@ -135,7 +135,10 @@ export function criarApiDemo() {
     async salvarAlunosEmLote(lista) { exigirAdmin(); lista.forEach(a => gravarAluno(a.id || novoId(), a)); salvar(); },
     async excluirAluno(id) {
       exigirAdmin(); const m = Object.keys((st.alunos[id] || {}).matriculas || {});
-      if (m.some(x => x !== String(st.escola.ano))) throw erro('permission-denied'); delete st.alunos[id]; salvar();
+      if (m.some(x => x !== String(st.escola.ano))) throw erro('permission-denied');
+      const tem = Object.values(st.planilhas).some(p => String(p.ano) === String(st.escola.ano) && p.alunos && p.alunos[id] && Object.values(p.alunos[id]).some(v => v !== null && v !== undefined && v !== ''));
+      if (tem) throw erro('aluno-com-notas', 'Este aluno tem notas no sistema: registre a saída em vez de apagar o cadastro.');
+      delete st.alunos[id]; salvar();
     },
     async listarTodosAlunos() { exigirAdmin(); return Object.values(st.alunos).map(a => ({ ...a })); },
     async registrarSaida(id, motivo) { exigirAdmin(); Object.assign(st.alunos[id], { turmaId: '', saida: { ano: String(st.escola.ano), motivo: motivo || '' } }); salvar(); },

@@ -19,6 +19,7 @@ const ERROS = {
   'permission-denied': 'Você não tem permissão para esta ação.',
   'unavailable': 'Sem conexão com o servidor. Tente de novo.',
   'auth/requires-recent-login': 'Por segurança, saia e entre de novo antes de trocar a senha.',
+  'aluno-com-notas': 'Este aluno tem notas no sistema: registre a saída em vez de apagar o cadastro.',
   'usuario-existente': 'Já existe um acesso com este nome de usuário. Use outro nome ou exclua o acesso antigo.',
   'usuario-com-email': 'Este acesso usa e-mail: use o botão de enviar e-mail para redefinir a senha.',
   'usuario-sem-email': 'Quem entra com nome de usuário não recebe e-mail. Peça à coordenação para cadastrar uma senha nova.',
@@ -193,7 +194,12 @@ export function criarApiFirebase(config) {
     async salvarAlunosEmLote(lista) {
       await lotes(lista.map(a => { const id = a.id || novoId(); const { id: _, ...d } = a; return [doc(db, 'alunos', id), comMatricula(d)]; }), true);
     },
-    async excluirAluno(id) { await deleteDoc(doc(db, 'alunos', id)); }, // só para quem nunca teve nota (a tela confere)
+    async excluirAluno(id) { // só para cadastro feito por engano: recusa se houver qualquer nota do aluno no ano, em qualquer turma
+      const pls = (await getDocs(query(collection(db, 'planilhas'), where('ano', '==', anoAtivo)))).docs.map(d => d.data());
+      const tem = pls.some(p => { const e = p.alunos && p.alunos[id]; return e && Object.values(e).some(v => v !== null && v !== undefined && v !== ''); });
+      if (tem) { const er = new Error('tem notas'); er.code = 'aluno-com-notas'; throw er; }
+      await deleteDoc(doc(db, 'alunos', id));
+    },
     async listarTodosAlunos() { // coordenação: todos, inclusive quem já saiu
       return (await getDocs(collection(db, 'alunos'))).docs.map(d => ({ id: d.id, ...d.data() }));
     },
