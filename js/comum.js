@@ -162,7 +162,9 @@ export function dataBR(v) {
 export function normalizarBackup(dados, anoAtivo) {
   const anoArq = String((dados.escola && dados.escola.ano) || anoAtivo);
   const planilhas = []; const vistos = new Set();
-  (dados.planilhas || []).forEach(p => {
+  // As planilhas já no formato com ano vêm primeiro: se o backup tiver a cópia antiga e a nova, vale a nova.
+  const ordem = [...(dados.planilhas || [])].sort((a, b) => (String(b.id || '').split('__').length === 4) - (String(a.id || '').split('__').length === 4));
+  ordem.forEach(p => {
     const partes = String(p.id || '').split('__');
     const ano = partes.length === 4 ? partes[0] : String(p.ano || anoArq);
     const id = planilhaId(ano, p.turmaId, p.disc, Number(p.bim));
@@ -176,5 +178,13 @@ export function normalizarBackup(dados, anoAtivo) {
     return { ...a, matriculas: m };
   });
   const escola = { ...(dados.escola || {}) }; delete escola.ano; // o ano letivo só muda pela virada de ano
-  return { escola, turmas: dados.turmas || [], alunos, planilhas, anos: dados.anos || [] };
+  return { escola, turmas: dados.turmas || [], alunos, planilhas, anos: dados.anos || [], anoArq, antigo: anoArq !== String(anoAtivo) };
+}
+// Backup de um ano anterior não pode mexer no ano em andamento: não muda turma, ordem nem dados da escola.
+// De quem já existe, só acrescenta o histórico de matrículas; quem não existe volta como "saiu".
+export function alunoParaImportar(a, existente, n, anoAtivo) {
+  if (!n.antigo) return a;
+  const matriculas = { ...(a.matriculas || {}) }; delete matriculas[String(anoAtivo)];
+  if (existente) return { id: a.id, matriculas };
+  return { ...a, matriculas, turmaId: '', saida: { ano: n.anoArq, motivo: 'restaurado de cópia de segurança' } };
 }

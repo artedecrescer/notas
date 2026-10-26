@@ -5,7 +5,7 @@ import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs,
   writeBatch, serverTimestamp, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
 } from '../vendor/firebase.js';
-import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno, emailParaLogin, emailVariante, normalizarBackup } from './comum.js';
+import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno, emailParaLogin, emailVariante, normalizarBackup, alunoParaImportar } from './comum.js';
 
 const ERROS = {
   'auth/invalid-credential': 'E-mail ou senha incorretos.',
@@ -301,9 +301,11 @@ export function criarApiFirebase(config) {
       if (!anoAtivo) await this.getEscola();
       const n = normalizarBackup(dados, anoAtivo);
       const ops = [];
-      if (Object.keys(n.escola).length) await setDoc(doc(db, 'config', 'escola'), n.escola, { merge: true });
-      n.turmas.forEach(t => { const { id, ...d } = t; ops.push([doc(db, 'turmas', id), d]); });
-      n.alunos.forEach(a => { const { id, ...d } = a; ops.push([doc(db, 'alunos', id), d]); });
+      if (!n.antigo && Object.keys(n.escola).length) await setDoc(doc(db, 'config', 'escola'), n.escola, { merge: true });
+      const turmasExist = new Set((await getDocs(collection(db, 'turmas'))).docs.map(d => d.id));
+      const alunosExist = new Set((await getDocs(collection(db, 'alunos'))).docs.map(d => d.id));
+      n.turmas.forEach(t => { const { id, ...d } = t; if (!n.antigo || !turmasExist.has(id)) ops.push([doc(db, 'turmas', id), d]); });
+      n.alunos.forEach(a0 => { const { id, ...d } = alunoParaImportar(a0, alunosExist.has(a0.id), n, anoAtivo); ops.push([doc(db, 'alunos', id), d]); });
       let puladas = 0;
       for (const p of n.planilhas) {
         const { id, ...d } = p;

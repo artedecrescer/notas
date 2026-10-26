@@ -1,6 +1,6 @@
 // MODO DEMONSTRAÇÃO — mesma interface do Firebase, mas tudo fica no navegador.
 // Dados 100% fictícios. Aplica as mesmas permissões das regras do servidor.
-import { planilhaId, novoId, ordenarTurmas, podeEditar, podeVer, DISCIPLINAS, loginParaEmail, ehUsuarioInterno, normalizarBackup } from './comum.js';
+import { planilhaId, novoId, ordenarTurmas, podeEditar, podeVer, DISCIPLINAS, loginParaEmail, ehUsuarioInterno, normalizarBackup, alunoParaImportar } from './comum.js';
 
 const KEY = 'sistema-notas-demo-v2';
 const SENHA = 'demo123';
@@ -213,9 +213,10 @@ export function criarApiDemo() {
     },
     async importarTudo(d) {
       exigirAdmin(); const n = normalizarBackup(d, anoAt());
-      st.escola = { ...st.escola, ...n.escola };
-      n.turmas.forEach(t => { st.turmas[t.id] = { ...(st.turmas[t.id] || {}), ...t }; });
-      n.alunos.forEach(a => { st.alunos[a.id] = { ...(st.alunos[a.id] || {}), ...a }; });
+      if (!n.antigo) st.escola = { ...st.escola, ...n.escola };
+      n.turmas.forEach(t => { if (!n.antigo || !st.turmas[t.id]) st.turmas[t.id] = { ...(st.turmas[t.id] || {}), ...t }; });
+      n.alunos.forEach(a0 => { const ex = st.alunos[a0.id], a = alunoParaImportar(a0, !!ex, n, anoAt());
+        st.alunos[a.id] = { ...(ex || {}), ...a, matriculas: { ...((ex && ex.matriculas) || {}), ...(a.matriculas || {}) } }; });
       let puladas = 0;
       n.planilhas.forEach(p => { const { id, ...r } = p; if (r.ano !== anoAt() && st.planilhas[id]) { puladas++; return; } st.planilhas[id] = r; });
       salvar();
