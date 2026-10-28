@@ -29,7 +29,8 @@ const env = await initializeTestEnvironment({ projectId: 'demo-notas',
   firestore: { rules: fs.readFileSync('firestore.rules', 'utf8'), host: '127.0.0.1', port: 8085 } });
 await env.clearFirestore();
 await fetch('http://127.0.0.1:9099/emulator/v1/projects/demo-notas/accounts', { method: 'DELETE' });
-const semRegras = fn => env.withSecurityRulesDisabled(ctx => fn(ctx.firestore()));
+// withSecurityRulesDisabled não devolve o resultado do callback: guardamos numa variável.
+const semRegras = async fn => { let r; await env.withSecurityRulesDisabled(async ctx => { r = await fn(ctx.firestore()); }); return r; };
 const ler = p => semRegras(async db => { const s = await db.doc(p).get(); return s.exists ? s.data() : null; });
 const gravar = (p, d, merge = false) => semRegras(db => db.doc(p).set(d, { merge }));
 const listar = c => semRegras(async db => (await db.collection(c).get()).docs.map(d => ({ id: d.id, ...d.data() })));
