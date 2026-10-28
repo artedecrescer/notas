@@ -4,6 +4,7 @@ import {
   signOut, onAuthStateChanged, sendPasswordResetEmail, setPersistence, browserLocalPersistence,
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, getDocs,
   writeBatch, serverTimestamp, updatePassword, reauthenticateWithCredential, EmailAuthProvider,
+  connectAuthEmulator, connectFirestoreEmulator,
 } from '../vendor/firebase.js';
 import { planilhaId, novoId, ordenarTurmas, loginParaEmail, ehUsuarioInterno, emailParaLogin, emailVariante, normalizarBackup, alunoParaImportar } from './comum.js';
 
@@ -29,11 +30,15 @@ export function msgErro(e) {
   return ERROS[c] || (e && e.message) || 'Erro inesperado.';
 }
 
-export function criarApiFirebase(config) {
+// opcoes.emulador: modo de teste automático (só em localhost): Auth e Firestore do emulador, nunca o banco real.
+export const EMULADOR = { auth: 'http://127.0.0.1:9099', host: '127.0.0.1', firestore: 8085 };
+export function criarApiFirebase(config, opcoes = {}) {
   const app = initializeApp(config);
   const auth = getAuth(app);
+  if (opcoes.emulador) connectAuthEmulator(auth, EMULADOR.auth, { disableWarnings: true });
   setPersistence(auth, browserLocalPersistence).catch(() => {});
   const db = getFirestore(app);
+  if (opcoes.emulador) connectFirestoreEmulator(db, EMULADOR.host, EMULADOR.firestore);
   let usuarioAtual = null;
   let anoAtivo = null; // atualizado sempre que a configuração da escola é lida
   // Ao gravar a turma de um aluno, registra também a matrícula no ano letivo em andamento.
@@ -58,6 +63,7 @@ export function criarApiFirebase(config) {
     const sec = initializeApp(config, 'sec-' + Date.now());
     try {
       const secAuth = getAuth(sec);
+      if (opcoes.emulador) connectAuthEmulator(secAuth, EMULADOR.auth, { disableWarnings: true });
       const cred = await createUserWithEmailAndPassword(secAuth, email, senha);
       await signOut(secAuth); return cred.user.uid;
     } finally { await deleteApp(sec).catch(() => {}); }
@@ -110,7 +116,7 @@ export function criarApiFirebase(config) {
         await b.commit();
         await setDoc(doc(db, 'config', 'escola'), {
           nome: escola, ano: String(ano), coordenadora: coordenadora || '', corte: 6,
-          bimestreAtual: 1, travas: { '1': false, '2': false, '3': false, '4': false },
+          bimestreAtual: 1, travas: { '1': false, '2': false, '3': false, '4': false }, versaoDados: 2,
         });
       } finally { bloquearCallback = false; }
       return lerPerfil(auth.currentUser);
@@ -151,6 +157,8 @@ export function criarApiFirebase(config) {
         if (existentes.has(nid)) return false;            // já existia antes: pode ter sido editada depois, não compara
         const n = depois.get(nid); return !n || canon(n.alunos) !== canon(p.alunos);
       });
+      // Tudo conferido: marca a migração como concluída para não reler o banco a cada login da coordenação.
+      if (!diferentes.length) await setDoc(doc(db, 'config', 'escola'), { versaoDados: 2 }, { merge: true });
       return { copiadas: ops.length, conferidas: legado.length, diferentes: diferentes.map(p => p.id) };
     },
     async registrarBackup() { await updateDoc(doc(db, 'config', 'escola'), { ultimoBackup: serverTimestamp() }); },

@@ -9,7 +9,12 @@ import { gerarBoletinsPDF, linhasBoletim, indexarPlanilhas } from './boletim.js'
 
 const params = new URLSearchParams(location.search);
 const configurado = !!(firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).includes('COLE_AQUI'));
-const api = (configurado && !params.has('demo'))
+// Modo de teste automático: só em localhost e com ?emulador. Usa o emulador do Firebase (projeto "demo-",
+// que não existe na nuvem), então nunca toca no banco real da escola.
+const emulador = params.has('emulador') && ['localhost', '127.0.0.1'].includes(location.hostname);
+const CONFIG_EMULADOR = { apiKey: 'demo-chave', authDomain: 'localhost', projectId: 'demo-notas', appId: 'demo' };
+const api = emulador ? (await import('./dados-firebase.js')).criarApiFirebase(CONFIG_EMULADOR, { emulador: true })
+  : (configurado && !params.has('demo'))
   ? (await import('./dados-firebase.js')).criarApiFirebase(firebaseConfig)
   : (await import('./dados-demo.js')).criarApiDemo();
 
@@ -57,7 +62,7 @@ window.addEventListener('beforeunload', e => { if (fila.pend > 0) { e.preventDef
 // ---------------- dados base ----------------
 async function carregarBase() {
   S.escola = (await api.getEscola()) || {};
-  if (isAdmin(S.perfil) && !S.migrado) {   // uma vez por sessão: copia notas do formato antigo (não apaga nada)
+  if (isAdmin(S.perfil) && !S.migrado && Number(S.escola.versaoDados || 0) < 2) {   // uma vez por sessão: copia notas do formato antigo (não apaga nada)
     S.migrado = true;
     try { const r = await api.migrarParaAnos(); if (r.copiadas) toast(`Notas organizadas por ano letivo (${r.conferidas} planilhas conferidas).`);
       if (r.diferentes && r.diferentes.length) console.error('Migração: planilhas a conferir', r.diferentes); }
